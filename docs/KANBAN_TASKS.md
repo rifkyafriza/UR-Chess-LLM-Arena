@@ -86,6 +86,12 @@
 - **Scope**: Implement `src/vision/live_stream.py` providing an MJPEG / HTTP web endpoint rendering real-time camera frames with detected ArUco bounding boxes, IDs, and live board state display side-by-side with SVG board.
 - **Acceptance Criteria**: Web UI displays video stream with responsive real-time overlays (< 100ms latency) and synchronized square occupancy.
 
+### Task 5C: Benchmark Real Board Photo with Both Vision Modes (`t_e5778cc1`)
+- **Assignee**: `vision-dev`
+- **Parent**: Task 5B (`t_92a117b5`)
+- **Scope**: Run validation on `assets/test_board_with_pieces.jpg` evaluating Mode 1 (ArUco corners) and Mode 2 (Grid & contour). Detect 32 pieces, map to algebraic squares, verify against initial position, serialize FEN, and output `assets/benchmark_result.jpg`.
+- **Acceptance Criteria**: 32/32 pieces detected on ground truth squares, FEN matches standard initial position, and visual verification overlay generated.
+
 ### Task 6: UR Ethernet Socket Driver & Communication Wrapper
 - **Assignee**: `robotics-dev`
 - **Parent**: Task 1
