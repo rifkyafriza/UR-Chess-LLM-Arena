@@ -1,0 +1,5 @@
+opencv-python
+python-chess
+numpy
+scipy
+flask
