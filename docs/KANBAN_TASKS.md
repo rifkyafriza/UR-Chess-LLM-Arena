@@ -121,31 +121,41 @@
   2. Chess domain validation: Illegal move handling, board state synchronization, FEN boundary checks.
   3. Coding standards: English comments & docstrings, proper type hints, error handling.
   4. Test coverage verification: Verify full pytest suite passes and edge cases are covered.
-- **Acceptance Criteria**: Review report produced in `docs/AUDIT_PHASE1_REVIEW.md`, certifying production readiness or listing actionable fixes.
+- **Acceptance Criteria**: Review report produced in `docs/AUDIT_PHASE1_REVIEW.md`, certifying production readiness or listing actionable fixes. Status: **APPROVED** (`t_83fe3ad6`).
 
-### Task 6: UR Ethernet Socket Driver & Communication Wrapper
+### Task 6A: UR Robot Driver & Communication Wrapper (`t_dcfb4e1c`)
 - **Assignee**: `robotics-dev`
-- **Parent**: Task 1
-- **Scope**: Implement `src/robot/ur_driver.py` handling TCP/IP communication on port 30002/30003, heartbeat monitoring, and error handling.
-- **Acceptance Criteria**: Driver connects, transmits valid URScript motion commands, and gracefully handles disconnects.
+- **Parent**: Task 1 (`t_9fe6ddda`)
+- **Scope**: Implement `src/robot/ur_driver.py` with dual-backend architecture:
+  1. `DashboardClient`: TCP socket on port 29999 (ASCII commands: power_on, brake_release, power_off, play, stop, get_robot_mode, get_safety_mode, close_popup).
+  2. `RealURDriver`: TCP socket on port 30002/30003 (URScript motion: movel, movej, stopl, set_digital_out, set_tool_digital_out) and binary telemetry unpacking.
+  3. `MockURDriver`: Pure Python zero-install in-memory simulator tracking TCP Cartesian pose, joints, and digital output states.
+  4. Factory `create_robot_driver(mode='sim'|'real', ...)`.
+- **Acceptance Criteria**: Unit tests in `tests/test_robot_driver.py` pass for both Mock and Real backends.
 
-### Task 7: Board-to-Robot Frame Coordinate Transformation
+### Task 6B: Board-to-Robot Frame Coordinates & Safety Envelope (`t_57fb6be1`)
 - **Assignee**: `robotics-dev`
-- **Parent**: Task 6
-- **Scope**: Implement `src/robot/coordinates.py` converting algebraic notation (`e2`, `e4`) into UR cartesian TCP coordinates $[X, Y, Z, R_x, R_y, R_z]$.
-- **Acceptance Criteria**: Math unit test confirms linear interpolation across all 64 squares matches calibrated board spacing within $\pm 0.5\text{mm}$.
+- **Parent**: Task 6A (`t_dcfb4e1c`)
+- **Scope**: Implement `src/robot/coordinates.py` mapping algebraic squares (`a1`–`h8`) to UR robot 3D Cartesian TCP coordinates $[X,Y,Z,Rx,Ry,Rz]$ with tool pointing downward, and `WorkspaceSafetyEnvelope` enforcing hard clamping ($X, Y, Z_{\min}$) preventing collisions with table.
+- **Acceptance Criteria**: 64 squares verified and out-of-bounds queries raise `SafetyViolationError`.
 
-### Task 8: Trajectory Waypoint Generator (Pick, Transit, Place, Park)
+### Task 6C: Trajectory Waypoint Generator & Graveyard Sequencer (`t_626934a5`)
 - **Assignee**: `robotics-dev`
-- **Parent**: Task 7
-- **Scope**: Implement `src/robot/trajectory.py` generating safe waypoints with high-altitude transit clearance ($Z \ge 80\text{mm}$) and gripper digital output triggers.
-- **Acceptance Criteria**: Generated URScript guarantees vertical descent/ascent without diagonal clipping across adjacent squares.
+- **Parent**: Task 6B (`t_57fb6be1`)
+- **Scope**: Implement `src/robot/trajectory.py` (approach $Z \ge 80\text{mm}$, vertical descent, grasp, ascent, transit, place, retract, park) and `src/robot/graveyard.py` (16 White / 16 Black off-board slots, 2-stage capture sequencer, castling sequencer).
+- **Acceptance Criteria**: Unit tests in `tests/test_trajectory.py` validate vertical clearance and capture/castling sequencing.
 
-### Task 9: Graveyard Allocation & Special Move Sequences
-- **Assignee**: `robotics-dev`
-- **Parent**: Task 8
-- **Scope**: Implement capture routines (removing target piece to side graveyard slots) and castling routines (two consecutive pick-and-place motions).
-- **Acceptance Criteria**: Unit test validates capture sequence issues 2-phase pick-and-place with distinct victim graveyard coordinate.
+### Task 6D: Comprehensive Test Suite for Robot Module (`t_51414546`)
+- **Assignee**: `qa-dev`
+- **Parent**: Task 6C (`t_626934a5`)
+- **Scope**: Implement `tests/test_robot.py` covering MockURDriver kinematics, RealURDriver mock server communication, coordinates calibration, and trajectory generation under pytest.
+- **Acceptance Criteria**: All robot tests pass with 100% assertions satisfied.
+
+### Task 6E: Kinematic Safety, Collision & Code Audit (`t_2545c775`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 6D (`t_51414546`)
+- **Scope**: Perform independent code, kinematic safety, and collision audit. Verify table boundary crash protection ($Z_{\min}$), vertical motion guarantee, socket timeouts, and write `docs/AUDIT_PHASE2_ROBOTICS.md`.
+- **Acceptance Criteria**: Reviewer certifies zero collision risk and production approval.
 
 ### Task 10: Refactor Game Engine for Physical Board Synchronization
 - **Assignee**: `backend-dev`
