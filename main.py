@@ -56,15 +56,15 @@ def run_sim(port: int, model: str) -> None:
     threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
     from src.simulation.web_app import app  # type: ignore[import]
     print(f"[SIM] Starting web simulation on http://127.0.0.1:{port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False)
 
 
 def run_live(port: int, camera: int) -> None:
     if _port_busy(port):
         sys.exit(f"[ERROR] Port {port} already in use. Choose another with --port.")
-    from src.vision.live_stream import app as vision_app  # type: ignore[import]
+    from src.vision.live_stream import start  # type: ignore[import]
     print(f"[LIVE] Starting camera stream on http://127.0.0.1:{port} (camera {camera})")
-    vision_app.run(host="0.0.0.0", port=port, debug=False)
+    vision_app.run(host="127.0.0.1", port=port, debug=False)
 
 
 def run_benchmark() -> None:

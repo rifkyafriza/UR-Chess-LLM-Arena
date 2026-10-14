@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,9 @@ if str(_ROOT) not in sys.path:
 from src.strategy.llm_client import get_best_move  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Honour --model from main.py (CHESS_MODEL env); default to llm_client default
+_MODEL_KW = {"model": os.environ["CHESS_MODEL"]} if os.environ.get("CHESS_MODEL") else {}
 
 # ── ArUco ID → chess piece mapping (standard starting layout) ─────────────────
 # White pieces (IDs 1-16): 1=Ra1,2=Nb1,3=Bc1,4=Qd1,5=Ke1,6=Bf1,7=Ng1,8=Rh1,9-16=Pa-Ph
@@ -482,30 +487,46 @@ def api_state():
 @app.route("/api/reset", methods=["POST"])
 def api_reset():
     _game.reset()
+    _undo_stack.clear()
     return jsonify(_game.to_dict())
 
 
-# Move history stack for undo: list of (board_fen, positions_snapshot)
-_undo_stack: list[tuple[str, dict[int, str]]] = []
+# Undo stack: list of (board_fen, positions_snapshot, history_length)
+_undo_stack: list[tuple[str, dict[int, str], int]] = []
+_SQUARE_RE = re.compile(r"^[a-h][1-8]$")
 
 
 @app.route("/api/move", methods=["POST"])
 def api_move():
     """Process human white move, run LLM for black counter-move."""
     global _undo_stack
-    data: dict = request.get_json(force=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object body required"}), 400
 
     # Client sends full current positions + the specific move made
     client_positions: dict[int, str] = {}
-    for k, v in (data.get("positions") or {}).items():
-        client_positions[int(k)] = str(v)
+    try:
+        raw_positions = data.get("positions") or {}
+        if not isinstance(raw_positions, dict):
+            raise ValueError("positions must be an object")
+        for k, v in raw_positions.items():
+            mid = int(k)
+            if not 1 <= mid <= 32:
+                raise ValueError("marker id out of range")
+            v = str(v)
+            if v != "__captured__" and not _SQUARE_RE.match(v):
+                raise ValueError("bad square")
+            client_positions[mid] = v
+        moved_id: int = int(data.get("moved_id", 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "invalid positions or moved_id"}), 400
 
     from_sq: str = str(data.get("from_sq", ""))
     to_sq: str = str(data.get("to_sq", ""))
-    moved_id: int = int(data.get("moved_id", 0))
 
-    if not from_sq or not to_sq:
-        return jsonify({"error": "missing from_sq or to_sq"}), 400
+    if not _SQUARE_RE.match(from_sq) or not _SQUARE_RE.match(to_sq):
+        return jsonify({"error": "from_sq/to_sq must be squares a1-h8"}), 400
 
     # Validate the move against python-chess authoritative board
     if _game.board.turn != chess.WHITE:
@@ -526,7 +547,7 @@ def api_move():
         return jsonify({"error": f"illegal move: {uci_str}"}), 400
 
     # Save undo snapshot BEFORE applying
-    _undo_stack.append((_game.board.fen(), dict(_game.positions)))
+    _undo_stack.append((_game.board.fen(), dict(_game.positions), len(_game.move_history)))
 
     # Apply white move to board
     _game.board.push(move)
@@ -541,7 +562,7 @@ def api_move():
 
     # ── LLM counter-move for black ────────────────────────────────────────────
     try:
-        llm_move = get_best_move(_game.board)
+        llm_move = get_best_move(_game.board, **_MODEL_KW)
         _game.last_reasoning = (
             f"LLM evaluated position after {move.uci()}.\n"
             f"Legal black moves: {', '.join(m.uci() for m in _game.board.legal_moves)}\n"
@@ -569,7 +590,7 @@ def api_move():
                 break
     except Exception as exc:
         logger.warning("LLM move failed: %s", exc)
-        _game.last_reasoning = f"LLM error: {exc}"
+        _game.last_reasoning = "LLM error: move unavailable (see server log)"
 
     return jsonify(_game.to_dict())
 
@@ -578,12 +599,11 @@ def api_move():
 def api_undo():
     global _undo_stack
     if not _undo_stack:
-        return jsonify({"error": "nothing to undo"})
-    fen, pos = _undo_stack.pop()
+        return jsonify({"error": "nothing to undo"}), 400
+    fen, pos, hist_len = _undo_stack.pop()
     _game.board = chess.Board(fen)
     _game.positions = pos
-    if _game.move_history:
-        _game.move_history.pop()
+    del _game.move_history[hist_len:]
     _game.last_reasoning = ""
     _game.last_llm_move = ""
     return jsonify(_game.to_dict())
@@ -591,11 +611,11 @@ def api_undo():
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def run(host: str = "0.0.0.0", port: int = 5060, debug: bool = False) -> None:
+def run(host: str = "127.0.0.1", port: int = 5060, debug: bool = False) -> None:
     """Start the simulation web server."""
     app.run(host=host, port=port, debug=debug)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    run(debug=True)
+    run()

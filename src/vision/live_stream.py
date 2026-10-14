@@ -55,6 +55,14 @@ def _capture_loop(camera_index: int) -> None:
 
     t_next = time.monotonic()
 
+    try:
+        _capture_frames(cap, t_next)
+    finally:
+        cap.release()
+
+
+def _capture_frames(cap, t_next: float) -> None:
+    global _jpeg_bytes, _board_state, _mode
     while True:
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -236,7 +244,8 @@ _HTML_PAGE = """<!DOCTYPE html>
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def start(camera_index: int = 0, port: int = 5050, debug: bool = False) -> None:
+def start(camera_index: int = 0, port: int = 5050, debug: bool = False,
+          host: str = "127.0.0.1") -> None:
     """Start capture thread then Flask (blocking)."""
     t = threading.Thread(target=_capture_loop, args=(camera_index,), daemon=True)
     t.start()
@@ -248,7 +257,7 @@ def start(camera_index: int = 0, port: int = 5050, debug: bool = False) -> None:
                 break
         time.sleep(0.1)
 
-    app.run(host="0.0.0.0", port=port, debug=debug, threaded=True, use_reloader=False)
+    app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
 
 
 if __name__ == "__main__":
