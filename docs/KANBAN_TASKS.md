@@ -23,83 +23,66 @@
 ## 2. Task Graph Overview
 
 ```
-[t_01: Scaffold & Deps] -------------------------------+
+[t_9fe6ddda: Scaffold & Deps] -------------------------+
    |                                                   |
    +-----------------------+                           |
    |                       |                           |
    v                       v                           v
-[t_02: Mock Harness]   [t_03: Board Homography]   [t_06: UR Socket Driver]
-                           |                           |
-                           v                           v
-                       [t_04: Piece Grid Detector] [t_07: Coordinate Transform]
-                           |                           |
-                           v                           v
-                       [t_05: FEN & Settle Filter] [t_08: Trajectory Planner]
-                           |                           |
-                           |                           v
-                           |                       [t_09: Graveyard & Castling]
-                           |                           |
-                           +-------------+-------------+
-                                         |
-                                         v
-   [t_10: State Sync Refactor] <---------+
-         |
-         v
-   [t_11: 9Router LLM Client]
-         |
-         v
-   [t_12: Master FSM Orchestrator]
-         |
-         v
-   [t_13: Kinematic Safety Review] (reviewer)
-         |
-         v
-   [t_14: E2E Integration Simulation] (qa-dev)
+[t_552c1c37: Mock Harness] [t_61ba99c1: ArUco Corners] [t_06: UR Socket Driver]
+                           [t_25d013c7: Grid Contour]  |
+                               |                       v
+                               v                   [t_07: Coordinate Transform]
+                           [t_1280be2c: Piece Grid]    |
+                               |                       v
+                               +-------------------+   [t_08: Trajectory Planner]
+                               |                   |   |
+                               v                   v   v
+                           [t_89b9724d: FEN]   [t_92a117b5: Live Stream]
 ```
 
 ---
 
 ## 3. Detailed Task Specifications
 
-### Task 1: Scaffold Project Directory & Dependencies
+### Task 1: Scaffold Project Structure & Dependencies (`t_9fe6ddda`)
 - **Assignee**: `backend-dev`
 - **Parent**: None
-- **Scope**: Setup Python package structure (`src/vision`, `src/robot`, `src/strategy`, `src/orchestrator`), create `requirements.txt` with OpenCV, python-chess, numpy, scipy.
-- **Acceptance Criteria**: Running `python3 -c "import cv2, chess; print('OK')"` succeeds cleanly.
+- **Scope**: Setup Python package structure (`src/vision`, `src/robot`, `src/strategy`, `src/orchestrator`), create `requirements.txt` with OpenCV, python-chess, numpy, scipy, flask.
+- **Acceptance Criteria**: Running `python3 -c "import cv2, chess, flask; print('OK')"` succeeds cleanly.
 
-### Task 2: Build Mock Hardware Harness for Headless Testing
+### Task 2: Build Mock Hardware Harness for Headless Testing (`t_552c1c37`)
 - **Assignee**: `qa-dev`
-- **Parent**: Task 1
+- **Parent**: Task 1 (`t_9fe6ddda`)
 - **Scope**: Create mock video stream feeder (synthetic images with ArUco markers) and mock UR TCP socket server simulating robot feedback.
 - **Acceptance Criteria**: Automated test suite can run in CI/headless WSL without physical camera or physical UR arm connected.
 
-### Task 3: Board Corner Localization & Perspective Warp (Mode 1: ArUco Corners)
+### Task 3: Board Corner Localization & Perspective Warp (Mode 1: ArUco Corners) (`t_61ba99c1`)
 - **Assignee**: `vision-dev`
-- **Parent**: Task 1
+- **Parent**: Task 1 (`t_9fe6ddda`)
 - **Scope**: Implement `src/vision/board_locator_aruco.py` detecting 4 outer corner ArUco markers (IDs 40-43) and producing warped $800 \times 800$ top-down image.
 - **Acceptance Criteria**: Warped image outputs exact $100 \times 100$ px squares aligned with algebraic coordinates a1..h8.
 
-### Task 3B: Pure Chessboard Grid & Perimeter Detection (Mode 2: No ArUco Corners)
+### Task 3B: Pure Chessboard Grid & Perimeter Detection (Mode 2: No ArUco Corners) (`t_25d013c7`)
 - **Assignee**: `vision-dev`
-- **Parent**: Task 1
+- **Parent**: Task 1 (`t_9fe6ddda`)
 - **Scope**: Implement `src/vision/board_locator_grid.py` detecting outer black framing contour and 8x8 alternating grid lines without corner markers, tested against `assets/reference_board.jpg`.
 - **Acceptance Criteria**: Evaluates `assets/reference_board.jpg` and successfully extracts four board corners and warps to identical canonical $800 \times 800$ frame.
 
-### Task 4: ArUco Piece Detection & 8x8 Occupancy Grid Mapping
+### Task 4: ArUco Piece Detection & 8x8 Occupancy Grid Mapping (`t_1280be2c`)
 - **Assignee**: `vision-dev`
-- **Parent**: Task 3
+- **Parent**: Task 3 (`t_61ba99c1`), Task 3B (`t_25d013c7`)
 - **Scope**: Implement `src/vision/piece_detector.py` reading pieces with IDs 1-32 and mapping their centers to the corresponding board grid cell.
 - **Acceptance Criteria**: Given warped image with all 32 pieces, returns correct initial board matrix with zero mismatches.
 
-### Task 5: FEN Serializer & Human Turn Settle Filter
+### Task 5: FEN Serializer & Human Turn Settle Filter (`t_89b9724d`)
 - **Assignee**: `vision-dev`
-- **Parent**: Task 4
+- **Parent**: Task 4 (`t_1280be2c`)
 - **Scope**: Implement `src/vision/fen_serializer.py` converting matrix to standard FEN notation. Implement motion stabilization filter requiring 15 consecutive stable frames before emitting settled state.
 - **Acceptance Criteria**: Output FEN string passes `chess.Board(fen).is_valid()` validation test.
 
-### Task 5B: Real-time Live Web Stream & Vision Overlay Server
+### Task 5B: Real-time Live Web Stream & Vision Overlay Server (`t_92a117b5`)
 - **Assignee**: `vision-dev`
-- **Parent**: Task 4
+- **Parent**: Task 4 (`t_1280be2c`)
 - **Scope**: Implement `src/vision/live_stream.py` providing an MJPEG / HTTP web endpoint rendering real-time camera frames with detected ArUco bounding boxes, IDs, and live board state display side-by-side with SVG board.
 - **Acceptance Criteria**: Web UI displays video stream with responsive real-time overlays (< 100ms latency) and synchronized square occupancy.
 
