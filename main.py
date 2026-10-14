@@ -87,6 +87,41 @@ def run_cli(model: str) -> None:
     sys.exit(result.returncode)
 
 
+def run_arena(robot_mode: str, model: str) -> None:
+    _check_9router(model)
+    from src.config import load_config
+    from src.orchestrator.master_fsm import MasterOrchestrator, ArenaState
+
+    cfg = load_config()
+    cfg.strategy.model = model
+
+    print(f"[ARENA] Starting arena loop (robot_mode={robot_mode}, model={model})")
+    print("[ARENA] Press Ctrl+C to stop.")
+
+    # In non-sim mode, user must wire a real human_fen_callback.
+    # For now, stdin-based FEN input is the integration surface.
+    def stdin_human_fen_cb(board):
+        try:
+            raw = input(f"\n[ARENA] Enter FEN after human move (or press Enter to retry): ").strip()
+        except EOFError:
+            return None
+        return raw if raw else None
+
+    orc = MasterOrchestrator(
+        config=cfg,
+        robot_mode=robot_mode,
+        human_fen_callback=stdin_human_fen_cb if robot_mode == "real" else None,
+    )
+
+    try:
+        result = orc.run_game()
+        print(f"[ARENA] Game over. Result: {result}")
+    except Exception as exc:
+        print(f"[ARENA] Stopped: {exc}")
+    finally:
+        orc.shutdown()
+
+
 def run_tests() -> None:
     print("[TEST] Running full automated test suite...")
     result = subprocess.run(
@@ -158,8 +193,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=["sim", "live", "benchmark", "cli", "test"],
+        choices=["sim", "live", "benchmark", "cli", "test", "arena"],
         help="Run mode (omit for interactive menu)",
+    )
+    p.add_argument(
+        "--robot-mode",
+        choices=["sim", "real"],
+        default="sim",
+        help="Robot driver mode for arena (default: sim)",
     )
     p.add_argument("--port", type=int, default=None, help="Override default port")
     p.add_argument("--camera", type=int, default=0, help="Camera index (live mode, default 0)")
@@ -188,6 +229,8 @@ def main(argv: list[str] | None = None) -> None:
             run_cli(args.model)
         elif args.mode == "test":
             run_tests()
+        elif args.mode == "arena":
+            run_arena(args.robot_mode, args.model)
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user. Bye.")
         sys.exit(0)

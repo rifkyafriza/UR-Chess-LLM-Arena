@@ -302,3 +302,16 @@ class TestShippedConfig:
         assert cfg.robot.mode in ("sim", "real")
         assert cfg.vision.stream_port == 5050
         assert cfg.simulation.port == 5060
+
+
+def test_unsafe_values_rejected(tmp_path):
+    import pytest
+    from src.config import load_config
+    for body in ("robot: {mode: banana}", "robot: {board_layout: {transit_clearance_z: 0.01}}",
+                 "robot: {board_layout: {square_pitch_x: -1}}", "robot: {ports: {script: 99999}}",
+                 "robot: {safety_envelope: {x_bounds: [5, -5]}}",
+                 "robot: {board_layout: {pick_height_z: .nan}}", "robot: {feature_plane_pose: [1, 2]}"):
+        f = tmp_path / "c.yaml"
+        f.write_text(body)
+        with pytest.raises(ValueError):
+            load_config(str(f))

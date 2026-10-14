@@ -148,8 +148,8 @@ def _build_robot(d: dict) -> RobotConfig:
             realtime=int(ports_d.get("realtime", 30003)),
         ),
         use_ur_feature=bool(d.get("use_ur_feature", False)),
-        feature_plane_pose=list(d.get("feature_plane_pose",
-                                      [0.0, 0.0, 0.0, 3.14159, 0.0, 0.0])),
+        feature_plane_pose=[float(v) for v in d.get(
+            "feature_plane_pose", [0.0, 0.0, 0.0, 3.14159, 0.0, 0.0])],
         board_layout=BoardLayoutConfig(
             square_pitch_x=float(bl_d.get("square_pitch_x", 0.055)),
             square_pitch_y=float(bl_d.get("square_pitch_y", 0.055)),
@@ -206,6 +206,46 @@ def _parse(raw: dict) -> ArenaConfig:
     )
 
 
+def _validate(cfg: ArenaConfig) -> None:
+    """Reject unsafe values. Raises ValueError (never falls back silently)."""
+    import math
+    r = cfg.robot
+    if r.mode not in ("sim", "real"):
+        raise ValueError(f"robot.mode must be 'sim' or 'real', got {r.mode!r}")
+    for name, port in (("dashboard", r.ports.dashboard), ("script", r.ports.script),
+                       ("realtime", r.ports.realtime)):
+        if not 1 <= port <= 65535:
+            raise ValueError(f"robot.ports.{name}={port} out of range")
+    bl, sp = r.board_layout, r.speeds
+    nums = [bl.square_pitch_x, bl.square_pitch_y, bl.pick_height_z, bl.transit_clearance_z,
+            sp.move_velocity, sp.move_acceleration, sp.joint_velocity, sp.joint_acceleration,
+            *r.feature_plane_pose, *r.safety_envelope.x_bounds,
+            *r.safety_envelope.y_bounds, *r.safety_envelope.z_bounds]
+    if not all(math.isfinite(v) for v in nums):
+        raise ValueError("config contains NaN/inf")
+    if bl.square_pitch_x <= 0 or bl.square_pitch_y <= 0:
+        raise ValueError("board_layout pitch must be > 0")
+    if bl.transit_clearance_z < 0.080:  # mirrors coordinates.TRANSIT_Z_MIN
+        raise ValueError("transit_clearance_z must be >= 0.080 m")
+    if bl.pick_height_z < 0:
+        raise ValueError("pick_height_z must be >= 0")
+    for axis in ("x", "y", "z"):
+        lo, hi = getattr(r.safety_envelope, f"{axis}_bounds")
+        if lo >= hi:
+            raise ValueError(f"safety_envelope.{axis}_bounds min must be < max")
+    for v in (sp.move_velocity, sp.move_acceleration, sp.joint_velocity, sp.joint_acceleration):
+        if v <= 0:
+            raise ValueError("speeds must be > 0")
+    if sp.move_velocity > 1.0 or sp.joint_velocity > 3.15:
+        raise ValueError("speed exceeds safe cap (1.0 m/s, 3.15 rad/s)")
+    if len(r.feature_plane_pose) != 6:
+        raise ValueError("feature_plane_pose needs 6 elements")
+    if not 1 <= cfg.vision.stream_port <= 65535 or not 1 <= cfg.simulation.port <= 65535:
+        raise ValueError("port out of range")
+    if cfg.strategy.timeout <= 0:
+        raise ValueError("strategy.timeout must be > 0")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -240,6 +280,8 @@ def load_config(path: Optional[str] = None) -> ArenaConfig:
     try:
         assert _yaml is not None
         raw = _yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
-        return _parse(raw)
-    except Exception:  # noqa: BLE001 — corrupt YAML → safe defaults
+        cfg = _parse(raw)
+    except Exception:  # noqa: BLE001 — corrupt/malformed YAML → safe defaults
         return ArenaConfig()
+    _validate(cfg)  # semantically unsafe values fail loudly, no silent fallback
+    return cfg
