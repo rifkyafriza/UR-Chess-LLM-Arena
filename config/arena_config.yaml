@@ -1,0 +1,48 @@
+# UR Chess LLM Arena — centralized configuration
+# All distances in meters, angles in radians.
+
+robot:
+  mode: sim                    # "sim" | "real"
+  host: 192.168.1.100
+  ports:
+    dashboard: 29999
+    script: 30002
+    realtime: 30003
+  use_ur_feature: false
+
+  # UR Feature Plane pose [X, Y, Z, Rx, Ry, Rz] (meters/radians, UR base frame)
+  feature_plane_pose: [0.0, 0.0, 0.0, 3.14159, 0.0, 0.0]
+
+  board_layout:
+    square_pitch_x: 0.055       # meters between file centres (a→h)
+    square_pitch_y: 0.055       # meters between rank centres (1→8)
+    pick_height_z: 0.010        # Z of piece top when gripping
+    transit_clearance_z: 0.120  # minimum Z for transit moves (≥0.080 hard floor)
+
+  safety_envelope:
+    x_bounds: [-0.80, 0.80]
+    y_bounds: [-0.80, 0.80]
+    z_bounds: [-0.20, 0.90]
+
+  speeds:
+    move_velocity: 0.25         # m/s  — movel speed
+    move_acceleration: 0.50     # m/s² — movel acceleration
+    joint_velocity: 1.05        # rad/s — movej speed
+    joint_acceleration: 1.40    # rad/s²
+
+vision:
+  camera_index: 0
+  locator_mode: aruco           # "contour" | "aruco"
+  aruco_dict: DICT_4X4_50
+  resolution: [1280, 720]
+  stream_port: 5050
+
+strategy:
+  api_base: http://127.0.0.1:20128/v1
+  model: ag/claude-sonnet-4-6
+  timeout: 30                   # seconds
+  fallback_engine: stockfish    # used when LLM call fails
+
+simulation:
+  host: 127.0.0.1
+  port: 5060
