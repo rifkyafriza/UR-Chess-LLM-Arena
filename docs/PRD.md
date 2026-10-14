@@ -41,8 +41,11 @@ Strategic moves are computed by Large Language Models (LLMs) hosted via local ga
 
 ### In-Scope (Phase 1 & 2):
 - Global overhead camera view (perpendicular 2D planar projection).
+- **Dual Board Localization Modes**:
+  - **Mode 1 (ArUco Corners)**: 4 outer corner ArUco markers (IDs 40-43) establishing homography matrix.
+  - **Mode 2 (Pure Grid Detection - No Corner Markers)**: Automatic 8x8 board perimeter and grid intersection detection based on outer framing line and alternating black/white cell contours (using reference vinyl roll-up board).
 - 32 cylindrical pieces fitted with distinct ArUco markers (Dictionary: `DICT_4X4_50`).
-- Homography transformation mapping 4 corner board ArUco markers to standard 8x8 algebraic chess grid (`a1` to `h8`).
+- Homography transformation mapping board coordinates to standard 8x8 algebraic chess grid (`a1` to `h8`).
 - Game state serialization into FEN (Forsyth–Edwards Notation).
 - Turn detection: Wait for human hand to leave camera field-of-view and board state to stabilize (settle timer ≥ 1.5s).
 - Strategic decision-making via LLM with strict UCI move generation (`e2e4`, `g1f3`).
@@ -51,7 +54,7 @@ Strategic moves are computed by Large Language Models (LLMs) hosted via local ga
 - Two-finger / vacuum end-effector pick, transit, and place routine.
 - Capture logic: Physical removal of captured piece to an off-board graveyard area before placing attacking piece.
 - Castling handling (two-step movement: King first, Rook second).
-- Web-based live telemetry preview (SVG board state, model thoughts, move history).
+- **Live Web Board Interface**: Real-time browser telemetry displaying live camera stream with overlaid ArUco detection boxes, grid lines, recognized piece labels, and side-by-side synchronized SVG chess board.
 
 ### Out-of-Scope (Deferred to Future Iterations):
 - Human face / emotion recognition.

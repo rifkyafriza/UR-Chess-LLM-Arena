@@ -56,11 +56,15 @@
 
 ### Module 1: Vision Pipeline (`src/vision/`)
 - **Camera Calibration**: Intrinsic parameters calibrated via standard chessboard pattern (`camera_matrix`, `dist_coeffs`).
-- **Board Localization**: 4 dedicated ArUco markers placed at board outer corners (`ID_CORNER_TL`, `ID_CORNER_TR`, `ID_CORNER_BR`, `ID_CORNER_BL`). Calculates homography matrix $H$ and warps image to canonical top-down square matrix ($800 \times 800$ pixels, $100 \times 100$ per cell).
+- **Dual Localization Engine**:
+  - **Mode 1 (ArUco Corner Anchors)**: 4 dedicated ArUco markers placed at board outer corners (`ID_CORNER_TL=40`, `ID_CORNER_TR=41`, `ID_CORNER_BR=42`, `ID_CORNER_BL=43`). Computes homography matrix $H$ warping outer boundary to $800 \times 800\text{ px}$.
+  - **Mode 2 (Direct Grid & Contour Detection)**: Detects the 8x8 outer framing contour and internal alternating black-and-white grid without corner markers. Performs perspective rectification directly from the board's four outer corners.
 - **Marker-to-Piece Mapping**: 32 distinct ArUco IDs mapped in `aruco_mapping.json`.
 - **Temporal Filter**:
   - Requires $N = 15$ continuous stable frames without bounding box displacement ($\Delta < 3\text{px}$) to declare turn settled.
   - Automatically rejects frames if human hands or large shadows obscure the board grid.
+- **Live Visualizer & HUD Overlay Stream**:
+  - Generates an MJPEG / HTTP stream rendering detected ArUco bounding boxes, piece labels (e.g. `White King [ID 5]`), square coordinates (`e4`), and grid overlays in real time.
 
 ### Module 2: Robotics & Motion Planner (`src/robot/`)
 - **Coordinate Systems**:

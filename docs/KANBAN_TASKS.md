@@ -73,11 +73,17 @@
 - **Scope**: Create mock video stream feeder (synthetic images with ArUco markers) and mock UR TCP socket server simulating robot feedback.
 - **Acceptance Criteria**: Automated test suite can run in CI/headless WSL without physical camera or physical UR arm connected.
 
-### Task 3: Board Corner Localization & Perspective Warp
+### Task 3: Board Corner Localization & Perspective Warp (Mode 1: ArUco Corners)
 - **Assignee**: `vision-dev`
 - **Parent**: Task 1
-- **Scope**: Implement `src/vision/board_locator.py` detecting 4 outer corner ArUco markers (IDs 40-43) and producing warped $800 \times 800$ top-down image.
+- **Scope**: Implement `src/vision/board_locator_aruco.py` detecting 4 outer corner ArUco markers (IDs 40-43) and producing warped $800 \times 800$ top-down image.
 - **Acceptance Criteria**: Warped image outputs exact $100 \times 100$ px squares aligned with algebraic coordinates a1..h8.
+
+### Task 3B: Pure Chessboard Grid & Perimeter Detection (Mode 2: No ArUco Corners)
+- **Assignee**: `vision-dev`
+- **Parent**: Task 1
+- **Scope**: Implement `src/vision/board_locator_grid.py` detecting outer black framing contour and 8x8 alternating grid lines without corner markers, tested against `assets/reference_board.jpg`.
+- **Acceptance Criteria**: Evaluates `assets/reference_board.jpg` and successfully extracts four board corners and warps to identical canonical $800 \times 800$ frame.
 
 ### Task 4: ArUco Piece Detection & 8x8 Occupancy Grid Mapping
 - **Assignee**: `vision-dev`
@@ -90,6 +96,12 @@
 - **Parent**: Task 4
 - **Scope**: Implement `src/vision/fen_serializer.py` converting matrix to standard FEN notation. Implement motion stabilization filter requiring 15 consecutive stable frames before emitting settled state.
 - **Acceptance Criteria**: Output FEN string passes `chess.Board(fen).is_valid()` validation test.
+
+### Task 5B: Real-time Live Web Stream & Vision Overlay Server
+- **Assignee**: `vision-dev`
+- **Parent**: Task 4
+- **Scope**: Implement `src/vision/live_stream.py` providing an MJPEG / HTTP web endpoint rendering real-time camera frames with detected ArUco bounding boxes, IDs, and live board state display side-by-side with SVG board.
+- **Acceptance Criteria**: Web UI displays video stream with responsive real-time overlays (< 100ms latency) and synchronized square occupancy.
 
 ### Task 6: UR Ethernet Socket Driver & Communication Wrapper
 - **Assignee**: `robotics-dev`
