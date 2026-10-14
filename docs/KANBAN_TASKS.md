@@ -155,34 +155,47 @@
 - **Assignee**: `reviewer`
 - **Parent**: Task 6D (`t_51414546`)
 - **Scope**: Perform independent code, kinematic safety, and collision audit. Verify table boundary crash protection ($Z_{\min}$), vertical motion guarantee, socket timeouts, and write `docs/AUDIT_PHASE2_ROBOTICS.md`.
-- **Acceptance Criteria**: Reviewer certifies zero collision risk and production approval.
+- **Acceptance Criteria**: Reviewer certifies zero collision risk and production approval. Status: **APPROVED** (`t_2545c775`).
 
-### Task 10: Refactor Game Engine for Physical Board Synchronization
+### Task 7A: Centralized Configuration System (`config/arena_config.yaml` & `src/config.py`)
 - **Assignee**: `backend-dev`
-- **Parent**: Task 1
-- **Scope**: Modularize `chess_game.py` into `src/strategy/engine.py` decoupling terminal inputs and allowing external FEN injection from the vision pipeline.
-- **Acceptance Criteria**: Engine accepts external FEN input and provides valid legal moves without interactive terminal prompts.
+- **Parent**: Task 6E (`t_2545c775`)
+- **Scope**: Create `config/arena_config.yaml` and a typed configuration loader `src/config.py` using Python standard dataclasses. Centralize robot settings (mode, host, ports, feature plane pose, pitch, speeds, safety envelope), vision settings, strategy/9Router settings, and simulation web settings. Expose `load_config(path)` and CLI override capabilities.
+- **Acceptance Criteria**: Configuration loads cleanly, validates fields, and provides defaults when config file is absent. Unit tests in `tests/test_config.py`.
 
-### Task 11: 9Router LLM Client with Fallback Guardrail
+### Task 7B: UR Feature Plane Support & Calibration Helper (`src/robot/coordinates.py` & `scripts/calibrate_feature.py`)
+- **Assignee**: `robotics-dev`
+- **Parent**: Task 7A
+- **Scope**:
+  1. Add native support for UR Feature Plane in `src/robot/coordinates.py`. Allow user to define Feature Plane pose $[X, Y, Z, Rx, Ry, Rz]$ matching Polyscope 3-point plane (Point 1: a1, Point 2: h1, Point 3: a8). In local board frame, square coordinates simplify to $(file\_idx \times dx, rank\_idx \times dy, z)$. Compute base-frame poses using rigid-body 3D transform (Rodrigues rotation vector + translation) or issue native URScript `pose_trans()`.
+  2. Implement interactive CLI calibration tool `scripts/calibrate_feature.py` that guides the user to touch a1, h1, a8 with robot freedrive, calculates plane pose, and saves it into `config/arena_config.yaml`.
+- **Acceptance Criteria**: Unit tests in `tests/test_feature_plane.py` verify 3D local-to-base transformation matching `pose_trans` mathematics.
+
+### Task 7C: Master Orchestrator Finite State Machine (`src/orchestrator/master_fsm.py`)
 - **Assignee**: `backend-dev`
-- **Parent**: Task 10
-- **Scope**: Implement `src/strategy/llm_client.py` connecting to `http://localhost:20128/v1` using `ag/claude-sonnet-4-6`. Implement self-healing retry and `python-chess` legal move fallback.
-- **Acceptance Criteria**: Simulated hallucinated LLM responses trigger automatic legal move fallback within 100ms.
+- **Parent**: Task 7B
+- **Scope**: Implement `MasterOrchestrator` in `src/orchestrator/master_fsm.py` coordinating Vision, 9Router LLM Strategy, and Robot Motion Controller:
+  - States: `INITIALIZING`, `WAIT_HUMAN_MOVE`, `PROCESSING_VISION`, `THINKING_LLM`, `ROBOT_MOVING`, `VERIFYING_BOARD`, `GAME_OVER`, `ERROR_SAFE_STOP`.
+  - Seamless dual-mode: Works with `MockURDriver` (no physical robot) and `RealURDriver` (physical robot).
+  - Integrates with `main.py` CLI launcher (`--mode arena`).
+- **Acceptance Criteria**: Automated test validates full game turn cycle transitions through all states cleanly without deadlock.
 
-### Task 12: Master Orchestrator Finite State Machine
-- **Assignee**: `backend-dev`
-- **Parent**: Task 5, Task 9, Task 11
-- **Scope**: Implement `src/orchestrator/fsm.py` tying together Vision, Strategy, and Robotics modules into the full game loop.
-- **Acceptance Criteria**: Full state transition loop executes seamlessly from Human Move Detection -> Board Sync -> LLM Move -> Robot Actuation -> State Verification.
-
-### Task 13: Kinematic Safety Envelope & Collision Audit
-- **Assignee**: `reviewer`
-- **Parent**: Task 12
-- **Scope**: Perform comprehensive static and kinematic review of all generated URScript commands, workspace bounds, speed limits, and E-Stop handlers.
-- **Acceptance Criteria**: Reviewer certifies zero out-of-bounds TCP coordinates and confirms mandatory safety limits are enforced.
-
-### Task 14: End-to-End Simulation Dry-Run
+### Task 7D: Comprehensive Integration & Game Loop Tests (`tests/test_master_orchestrator.py`)
 - **Assignee**: `qa-dev`
-- **Parent**: Task 13
-- **Scope**: Run full simulated 10-turn chess game using the mock harness, validating state consistency, move legality, and trajectory logs.
-- **Acceptance Criteria**: Test script completes 10 turns without errors, deadlocks, or illegal moves.
+- **Parent**: Task 7C
+- **Scope**: End-to-end integration test suite simulating full game turns:
+  - Simulated human move e2e4 -> vision board sync -> LLM move e7e5 -> trajectory generator -> mock robot execution.
+  - Test capture moves with graveyard sequencing.
+  - Test castling moves.
+  - Test graceful recovery from illegal moves and communication drops.
+- **Acceptance Criteria**: Pytest suite passes 100% with headless mock harness.
+
+### Task 7E: Reviewer Security, Kinematic & Config Audit (`docs/AUDIT_PHASE3_FULL_SYSTEM.md`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 7D
+- **Scope**: Full system audit covering:
+  - Config file injection and path traversal security.
+  - UR Feature Plane math correctness against Polyscope `pose_trans`.
+  - State machine safety transitions during error/disconnect.
+  - Total test suite coverage.
+- **Acceptance Criteria**: Reviewer certifies full system readiness and produces `docs/AUDIT_PHASE3_FULL_SYSTEM.md`.
