@@ -43,9 +43,8 @@ Certification: **APPROVED** (HIGH findings fixed in this audit; MEDIUM/LOW track
   camera); now calls `live_stream.start`.
 - M4. (fixed) LLM exception text echoed to the client (`LLM error: {exc}`) could leak endpoint details;
   now generic message, detail stays in server log.
-- M5. (open) `chess_game.py` contains placeholder `Bearer YOUR_API_KEY_HERE` and ignores the `--model`
-  flag `main.py --mode cli` passes (it prompts via `input()`). CLI mode is functionally broken. Not a
-  secret leak. Follow-up: make it reuse `llm_client._load_api_key` and accept `--model`.
+- M5. (fixed) `chess_game.py` now accepts `--model` via `argparse` (defaults to `CHESS_MODEL` or `_MODEL`),
+  reuses `src.strategy.llm_client.get_best_move`, and removed placeholder Bearer key.
 - M6. (open) Simulation state (`_game`, `_undo_stack`) is module-global with no lock; Flask dev server is
   multi-threaded, so concurrent `/api/move` calls race. Acceptable for single-user local sim; add a
   `threading.Lock` if multi-user.
@@ -65,9 +64,9 @@ Certification: **APPROVED** (HIGH findings fixed in this audit; MEDIUM/LOW track
 
 ## Tests
 
-101 tests pass. Gaps worth adding later: `/api/move` malformed-payload cases (400s), undo-after-two-moves
+106 tests pass. Gaps worth adding later: `/api/move` malformed-payload cases (400s), undo-after-two-moves
 history length, live_stream capture teardown.
 
 ## Files changed by this audit
 
-`main.py`, `src/simulation/web_app.py`, `src/vision/live_stream.py`, `docs/AUDIT_PHASE1_REVIEW.md`.
+`main.py`, `src/simulation/web_app.py`, `src/vision/live_stream.py`, `chess_game.py`, `tests/test_chess_game.py`, `docs/AUDIT_PHASE1_REVIEW.md`.

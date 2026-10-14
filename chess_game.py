@@ -1,43 +1,32 @@
+"""Terminal chess game with live HTML/SVG preview and LLM opponent support."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import random
+import sys
+import time
+import webbrowser
+from pathlib import Path
+
 import chess
 import chess.svg
-import json
-import urllib.request
-import webbrowser
-import os
-import time
-import random
 
-def llm_move(board, model_name):
-    url = "http://localhost:20128/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer YOUR_API_KEY_HERE"
-    }
-    legal = [m.uci() for m in board.legal_moves]
-    prompt = f"FEN: {board.fen()}\nLegal: {legal}\nReply EXACTLY with ONE UCI move from list. No extra text."
-    
-    data = json.dumps({
-        "model": model_name,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.0,
-        "stream": False
-    }).encode("utf-8")
-    
-    req = urllib.request.Request(url, data=data, headers=headers)
-    
-    print("\n" + "="*40)
-    print(f"[DEBUG] MODEL: {model_name}")
-    print(f"[DEBUG] PROMPT:\n{prompt}")
-    print("="*40)
-    
-    with urllib.request.urlopen(req) as res:
-        raw_res = res.read()
-        print(f"[DEBUG] RAW RESP:\n{raw_res.decode('utf-8')}")
-        print("="*40)
-        body = json.loads(raw_res)
-        return body["choices"][0]["message"]["content"].strip()
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-def render_gui(board, white_name, black_name):
+from src.strategy.llm_client import _MODEL, get_best_move
+
+
+def llm_move(board: chess.Board, model_name: str) -> str:
+    """Get best move from LLM strategy client and return UCI string."""
+    move = get_best_move(board, model=model_name)
+    return move.uci()
+
+
+def render_gui(board: chess.Board, white_name: str, black_name: str) -> None:
     html = f"""
     <html>
     <head>
@@ -54,58 +43,105 @@ def render_gui(board, white_name, black_name):
     </body>
     </html>
     """
-    with open("ui_preview.html", "w") as f:
+    with open("ui_preview.html", "w", encoding="utf-8") as f:
         f.write(html)
 
-def main():
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build CLI argument parser for chess_game."""
+    parser = argparse.ArgumentParser(description="AI Chess Arena (CLI Mode)")
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("CHESS_MODEL", _MODEL),
+        help=f"LLM model name via 9Router (default: {os.environ.get('CHESS_MODEL', _MODEL)})",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    default_model = args.model
+
     print("=== AI Chess Arena ===")
     print("Select Game Mode:")
     print("1. Player vs Player")
     print("2. Player vs LLM")
     print("3. LLM vs LLM")
-    
-    mode_choice = input("Enter mode (1-3): ").strip()
-    
+
+    try:
+        mode_choice = input("Enter mode (1-3): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nBye.")
+        return
+
     white_is_human = True
     black_is_human = True
     white_name = "Player 1"
     black_name = "Player 2"
-    
+
     if mode_choice == "2":
         print("\nWho plays White?")
         print("1. Player")
         print("2. LLM")
-        color_choice = input("Enter choice (1-2): ").strip()
+        try:
+            color_choice = input("Enter choice (1-2): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            return
+
         if color_choice == "1":
             white_is_human = True
             black_is_human = False
             white_name = "Human"
-            black_name = input("Enter LLM model name for Black (e.g., model-black): ").strip() or "model-black"
+            try:
+                entered = input(f"Enter LLM model name for Black [{default_model}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                entered = ""
+            black_name = entered or default_model
         else:
             white_is_human = False
             black_is_human = True
-            white_name = input("Enter LLM model name for White (e.g., model-white): ").strip() or "model-white"
+            try:
+                entered = input(f"Enter LLM model name for White [{default_model}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                entered = ""
+            white_name = entered or default_model
             black_name = "Human"
-            
+
     elif mode_choice == "3":
         white_is_human = False
         black_is_human = False
-        white_name = input("Enter LLM model name for White: ").strip() or "model-white"
-        black_name = input("Enter LLM model name for Black: ").strip() or "model-black"
+        try:
+            entered_w = input(f"Enter LLM model name for White [{default_model}]: ").strip()
+            white_name = entered_w or default_model
+            entered_b = input(f"Enter LLM model name for Black [{default_model}]: ").strip()
+            black_name = entered_b or default_model
+        except (EOFError, KeyboardInterrupt):
+            white_name = default_model
+            black_name = default_model
 
     board = chess.Board()
     render_gui(board, white_name, black_name)
-    webbrowser.open("file://" + os.path.realpath("ui_preview.html"))
+    try:
+        webbrowser.open("file://" + os.path.realpath("ui_preview.html"))
+    except Exception:
+        pass
 
     while not board.is_game_over():
         is_white_turn = (board.turn == chess.WHITE)
         current_is_human = white_is_human if is_white_turn else black_is_human
         current_name = white_name if is_white_turn else black_name
-        
-        print(f"\n{current_name}'s turn ({"White" if is_white_turn else "Black"}).")
-        
+
+        turn_str = "White" if is_white_turn else "Black"
+        print(f"\n{current_name}'s turn ({turn_str}).")
+
         if current_is_human:
-            uci = input("Enter move (UCI format, e.g., e2e4): ").strip()
+            try:
+                uci = input("Enter move (UCI format, e.g., e2e4): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nGame aborted.")
+                break
         else:
             print(f"{current_name} is thinking...")
             try:
@@ -134,11 +170,12 @@ def main():
                 print("Invalid LLM response. Forcing random move.")
                 board.push(random.choice(list(board.legal_moves)))
                 render_gui(board, white_name, black_name)
-                
+
         if not current_is_human:
             time.sleep(1)
 
     print("\nGame Over:", board.result())
+
 
 if __name__ == "__main__":
     main()
