@@ -3,3 +3,4 @@ python-chess
 numpy
 scipy
 flask
+openai
