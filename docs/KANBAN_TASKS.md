@@ -92,6 +92,27 @@
 - **Scope**: Run validation on `assets/test_board_with_pieces.jpg` evaluating Mode 1 (ArUco corners) and Mode 2 (Grid & contour). Detect 32 pieces, map to algebraic squares, verify against initial position, serialize FEN, and output `assets/benchmark_result.jpg`.
 - **Acceptance Criteria**: 32/32 pieces detected on ground truth squares, FEN matches standard initial position, and visual verification overlay generated.
 
+### Task 5D: 9Router LLM Strategy Client & Guardrail (`t_strategy_llm`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 1 (`t_9fe6ddda`)
+- **Scope**: Implement `src/strategy/llm_client.py` connecting to `http://127.0.0.1:20128/v1` (`ag/claude-sonnet-4-6`). Formulate chess prompt with FEN and legal UCI moves. Sanitize response, validate against `python-chess` legal moves, with retry / legal move fallback.
+- **Acceptance Criteria**: Unit test confirms LLM queries succeed and hallucinated moves trigger fallback to legal move within 100ms.
+
+### Task 5E: Interactive Web Simulation Mode with ArUco Canvas & Live SVG (`t_sim_web`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 5D, Task 5B
+- **Scope**: Implement `src/simulation/web_app.py` (Flask on port 5060) featuring split-view browser GUI:
+  1. Left: Draggable ArUco pieces (IDs 1-32) on board photo background (`assets/reference_board.jpg`).
+  2. Right: Synchronized digital chessboard rendered with `chess.svg.board`, move log, and FEN.
+  3. Closed-loop flow: Human drag-and-drop -> virtual frame capture -> real CV pipeline -> FEN serialize -> 9Router LLM move -> auto-move black ArUco piece on canvas.
+- **Acceptance Criteria**: User can play a full turn via browser drag-and-drop, vision pipeline detects move, LLM replies, and both visual board and SVG board synchronize.
+
+### Task 5F: Unified Multi-Mode CLI Launcher `main.py` (`t_main_launcher`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 5E
+- **Scope**: Implement `main.py` at repository root providing an interactive menu and CLI arguments (`--mode {sim,live,benchmark,cli,test}`) to easily select and launch any system mode.
+- **Acceptance Criteria**: Running `python3 main.py` prompts interactive selection or executes requested mode flag cleanly.
+
 ### Task 6: UR Ethernet Socket Driver & Communication Wrapper
 - **Assignee**: `robotics-dev`
 - **Parent**: Task 1
