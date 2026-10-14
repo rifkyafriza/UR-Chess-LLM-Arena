@@ -107,11 +107,21 @@
   3. Closed-loop flow: Human drag-and-drop -> virtual frame capture -> real CV pipeline -> FEN serialize -> 9Router LLM move -> auto-move black ArUco piece on canvas.
 - **Acceptance Criteria**: User can play a full turn via browser drag-and-drop, vision pipeline detects move, LLM replies, and both visual board and SVG board synchronize.
 
-### Task 5F: Unified Multi-Mode CLI Launcher `main.py` (`t_main_launcher`)
+### Task 5F: Unified Multi-Mode CLI Launcher `main.py` (`t_3ffa63b4`)
 - **Assignee**: `backend-dev`
 - **Parent**: Task 5E
 - **Scope**: Implement `main.py` at repository root providing an interactive menu and CLI arguments (`--mode {sim,live,benchmark,cli,test}`) to easily select and launch any system mode.
 - **Acceptance Criteria**: Running `python3 main.py` prompts interactive selection or executes requested mode flag cleanly.
+
+### Task 5G: Code Quality, Security & Architecture Audit (`t_audit_phase1`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 5F (`t_3ffa63b4`)
+- **Scope**: Perform comprehensive security, code quality, and architecture review on all modules delivered in Phase 1 & Simulation (`src/vision/`, `src/simulation/`, `src/strategy/`, `main.py`, and `tests/`):
+  1. Security review: API keys handling, network endpoints safety (Flask host bindings, CORS, input sanitization).
+  2. Chess domain validation: Illegal move handling, board state synchronization, FEN boundary checks.
+  3. Coding standards: English comments & docstrings, proper type hints, error handling.
+  4. Test coverage verification: Verify full pytest suite passes and edge cases are covered.
+- **Acceptance Criteria**: Review report produced in `docs/AUDIT_PHASE1_REVIEW.md`, certifying production readiness or listing actionable fixes.
 
 ### Task 6: UR Ethernet Socket Driver & Communication Wrapper
 - **Assignee**: `robotics-dev`
