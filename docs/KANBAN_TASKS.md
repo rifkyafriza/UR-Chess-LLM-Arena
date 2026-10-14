@@ -3,7 +3,7 @@
 ## Project: UR Chess LLM Arena
 **Board Slug**: `ur-chess-arena`  
 **Tenant**: `ur-chess`  
-**Workspace**: `/home/rifky/projects/github/chess-llm-arena`
+**Workspace**: `/home/rifky/projects/github/UR-Chess-LLM-Arena`
 
 ---
 
