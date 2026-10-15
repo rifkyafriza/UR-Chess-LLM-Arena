@@ -245,4 +245,73 @@
   - Canvas & SVG board synchronization correctness.
   - Zero-robot standalone operation in simulation mode.
   - Full test suite passing status.
-- **Acceptance Criteria**: Reviewer certifies all 3 bug fixes and produces `docs/AUDIT_BUGFIXES_SIM_PVP.md`.
+- **Acceptance Criteria**: Reviewer certifies all 3 bug fixes and produces `docs/AUDIT_BUGFIXES_SIM_PVP.md`. Status: **APPROVED** (`t_996ec590`).
+
+### Task 9A: Update CLI main.py, Fix Benchmark sys.path, & Migrate Default Sim Port (`main.py`, `scripts/benchmark_board.py`, `src/config.py`, `config/arena_config.yaml`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 8D (`t_996ec590`)
+- **Scope**:
+  1. Fix `scripts/benchmark_board.py`: add repo root to `sys.path` so running `python scripts/benchmark_board.py` directly or via `main.py` never fails with `ModuleNotFoundError: No module named 'src'`.
+  2. In `main.py`: inject `PYTHONPATH` with repo root into subprocess environment in `run_benchmark()`, `run_cli()`, `run_tests()`.
+  3. Update `main.py` interactive menu:
+     - Add option `[6] Arena Mode (Full FSM: human vs LLM + robot)`.
+     - Sub-prompt for robot mode: `1: Sim (Mock UR), 2: Real UR robot`.
+     - Update menu header and instructions.
+  4. Update `main.py` non-interactive CLI:
+     - Clarify help messages and usage examples.
+  5. Migrate default simulation port from 5060 to **5070**:
+     - Change in `config/arena_config.yaml` (`simulation.port: 5070`).
+     - Change in `src/config.py` (default `port: int = 5070`).
+     - Change in `src/simulation/web_app.py` (default `port: int = 5070`).
+     - Change in `main.py` (`DEFAULT_SIM_PORT: int = 5070`).
+     - Update existing tests (`tests/test_config.py`, `tests/test_main_launcher.py`) to assert 5070.
+- **Acceptance Criteria**: `python3 main.py --mode benchmark` runs without `No module named 'src'`. Port 5060 is nowhere used as default. Option 6 works in interactive menu.
+
+### Task 9B: Dual-Pane Live Stream with Live Camera & Digital SVG Chessboard (`src/vision/live_stream.py`)
+- **Assignee**: `vision-dev`
+- **Parent**: Task 9A
+- **Scope**:
+  1. Update `src/vision/live_stream.py` web UI to a split dual-pane layout:
+     - Left pane: Live camera video feed (`/video`) with ArUco corners/piece detection overlay and thumbnail.
+     - Right pane: Digital chessboard SVG visualization rendering the detected board state in real-time.
+     - Status card: Current localization mode (`ARUCO` / `GRID`), detected piece count (White / Black), current detected FEN string, and settle/stability status.
+  2. Implement/update endpoint:
+     - Add or enrich `/state` to return current `fen` and `svg` (rendered via `chess.svg.board()`) or `/board_svg` endpoint.
+     - Poll `/state` in frontend to update the right-hand digital board seamlessly.
+- **Acceptance Criteria**: Accessing `http://127.0.0.1:5050` renders both live camera feed and synced digital SVG chessboard.
+
+### Task 9C: Comprehensive README.md Documentation Update (`README.md`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 9A
+- **Scope**:
+  1. Update `README.md` to reflect all latest features:
+     - Quick start instructions for computer (WSL2 / Linux / Windows).
+     - New default port: `5070` for Web Simulation (Player vs Player and Player vs AI).
+     - Live Camera Stream port `5050` with dual-pane camera + digital SVG board display.
+     - Interactive menu options `[1-6]`, including Arena mode.
+     - Benchmark command and instructions.
+     - Centralized config `config/arena_config.yaml` and Feature Plane calibration.
+  2. Ensure clean formatting, zero broken paths, all English documentation.
+- **Acceptance Criteria**: `README.md` is complete, accurate, and reflects the current state of the codebase.
+
+### Task 9D: Comprehensive Test Suite for Phase 5 Refinements (`tests/test_phase5_refinements.py`)
+- **Assignee**: `qa-dev`
+- **Parent**: Task 9B
+- **Scope**:
+  1. Test `scripts/benchmark_board.py` execution via subprocess returns exit code 0 without `ModuleNotFoundError`.
+  2. Test `main.py` interactive menu handling option 6 (Arena mode).
+  3. Test port 5070 is default across config, launcher, and simulation.
+  4. Test live stream `/state` and digital SVG board rendering.
+  5. Run full test suite and confirm 100% pass.
+- **Acceptance Criteria**: All phase 5 tests pass; total test suite 100% green.
+
+### Task 9E: Reviewer Security, Port Verification & Dual-Pane Audit (`docs/AUDIT_PHASE5_REFINEMENTS.md`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 9D
+- **Scope**:
+  1. Verify zero references to port 5060 as default anywhere in code and config.
+  2. Verify benchmark runs cleanly from any working directory.
+  3. Verify dual-pane live stream functionality and HTML injection safety.
+  4. Verify interactive and non-interactive launcher robustness.
+  5. Verify full test suite passing status and produce `docs/AUDIT_PHASE5_REFINEMENTS.md`.
+- **Acceptance Criteria**: Reviewer certifies Phase 5 deliverables with APPROVED status.
