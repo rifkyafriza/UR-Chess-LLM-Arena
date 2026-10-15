@@ -190,12 +190,59 @@
   - Test graceful recovery from illegal moves and communication drops.
 - **Acceptance Criteria**: Pytest suite passes 100% with headless mock harness.
 
-### Task 7E: Reviewer Security, Kinematic & Config Audit (`docs/AUDIT_PHASE3_FULL_SYSTEM.md`)
+### Task 7E: Reviewer Security, Kinematic & Config Audit (`t_dfca0dda`)
 - **Assignee**: `reviewer`
-- **Parent**: Task 7D
+- **Parent**: Task 7D (`t_4e7107d2`)
 - **Scope**: Full system audit covering:
   - Config file injection and path traversal security.
   - UR Feature Plane math correctness against Polyscope `pose_trans`.
   - State machine safety transitions during error/disconnect.
   - Total test suite coverage.
-- **Acceptance Criteria**: Reviewer certifies full system readiness and produces `docs/AUDIT_PHASE3_FULL_SYSTEM.md`.
+- **Acceptance Criteria**: Reviewer certifies full system readiness and produces `docs/AUDIT_PHASE3_FULL_SYSTEM.md`. Status: **APPROVED** (`t_dfca0dda`).
+
+### Task 8A: Fix Mode Live vision_app NameError in main.py (`main.py` & `tests/test_launcher_live.py`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 7E (`t_dfca0dda`)
+- **Scope**: Fix `run_live()` in `main.py` where `vision_app.run` raises `NameError: name 'vision_app' is not defined`. Call `src.vision.live_stream.start(camera_index=camera, port=port)` correctly or export `app as vision_app`. Add unit tests in `tests/test_launcher_live.py` verifying launcher entrypoint executes without NameError.
+- **Acceptance Criteria**: `run_live` invokes `live_stream.start` with proper parameters; verified by automated unit tests.
+
+### Task 8B: Implement Player vs Player Mode & Fix Board State Synchronization in Web Simulation (`src/simulation/web_app.py`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 8A
+- **Scope**:
+  1. Add Game Mode support in `src/simulation/web_app.py`: toggle between "ai" (LLM opponent) and "pvp" (Player vs Player / Pass-and-Play).
+  2. UI enhancements in HTML template:
+     - Mode dropdown / toggle: `[Player vs AI | Player vs Player]`.
+     - In PvP mode: Allow Black player to drag Black pieces (IDs 17-32) on Black's turn (`serverTurn === 'black'`).
+     - In PvP mode: `/api/move` processes Black moves legally via `python-chess` without calling the LLM.
+     - In AI mode: If LLM is unavailable or fails, display clear feedback without locking the game board.
+  3. Guarantee zero-robot operation: Ensure simulation runs 100% in-browser/memory without attempting any socket connection to physical UR robots.
+  4. Fix web board display and ArUco canvas state synchronization:
+     - Captured pieces: Do not render `__captured__` pieces on canvas or off-screen negative coordinates. Omit or place in captured tray.
+     - Synchronize captured pieces on White moves: When White captures a Black piece, mark the victim marker as `__captured__` in `_game.positions` so pieces don't overlap on canvas.
+     - Castling synchronization: When either player castles, update both the King and the Rook marker coordinates in `_game.positions`.
+     - En-passant synchronization: Mark captured pawn as `__captured__`.
+     - Verify SVG right pane and ArUco canvas left pane match precisely.
+- **Acceptance Criteria**: Both AI and PvP modes work smoothly. Dragging works for Black in PvP. Canvas accurately mirrors python-chess board without duplicate/overlapping pieces.
+
+### Task 8C: Comprehensive Integration Tests for Live Stream, PvP Simulation & Board Display (`tests/test_simulation_pvp.py`)
+- **Assignee**: `qa-dev`
+- **Parent**: Task 8B
+- **Scope**: Implement test suite in `tests/test_simulation_pvp.py`:
+  - Test `main.py` `run_live` dispatch without NameError.
+  - Test `/api/move` in PvP mode for full White + Black alternating moves.
+  - Test ArUco positions dictionary during captures, castling, and en-passant to ensure no pieces overlap.
+  - Test `/api/mode` endpoint and mode switching.
+  - Test simulation operates cleanly with zero external robot connection.
+- **Acceptance Criteria**: 100% test pass rate in pytest.
+
+### Task 8D: Reviewer Audit for Bug Fixes, PvP Mode & Web Simulation Integrity (`docs/AUDIT_BUGFIXES_SIM_PVP.md`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 8C
+- **Scope**: Independent audit of:
+  - `main.py` live mode invocation.
+  - PvP mode state machine and input validation in Flask.
+  - Canvas & SVG board synchronization correctness.
+  - Zero-robot standalone operation in simulation mode.
+  - Full test suite passing status.
+- **Acceptance Criteria**: Reviewer certifies all 3 bug fixes and produces `docs/AUDIT_BUGFIXES_SIM_PVP.md`.
