@@ -152,6 +152,7 @@ _MENU = """
 ║  [4] Terminal Chess (CLI)  (vs 9Router LLM)           ║
 ║  [5] Run Full Test Suite   (pytest)                   ║
 ║  [6] Arena Mode            (Full FSM: human vs LLM + robot) ║
+║  [7] Config Editor         (View & edit arena_config) ║
 ║  [0] Exit                                             ║
 ╚══════════════════════════════════════════════════════╝
 """
@@ -193,8 +194,11 @@ def interactive_menu() -> None:
             sys.exit(0)
         robot_mode = "real" if robot_choice == "2" else "sim"
         run_arena(robot_mode, _DEFAULTS["model"])
+    elif choice == "7":
+        from src.config_editor import interactive_config_editor  # type: ignore[import]
+        interactive_config_editor()
     else:
-        print(f"[ERROR] Unknown choice '{choice}'. Valid: 0-6.")
+        print(f"[ERROR] Unknown choice '{choice}'. Valid: 0-7.")
         sys.exit(1)
 
 
@@ -209,7 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--mode",
-        choices=["sim", "live", "benchmark", "cli", "test", "arena"],
+        choices=["sim", "live", "benchmark", "cli", "test", "arena", "config"],
         help="Run mode (omit for interactive menu)",
     )
     p.add_argument(
@@ -247,6 +251,9 @@ def main(argv: list[str] | None = None) -> None:
             run_tests()
         elif args.mode == "arena":
             run_arena(args.robot_mode, args.model)
+        elif args.mode == "config":
+            from src.config_editor import interactive_config_editor  # type: ignore[import]
+            interactive_config_editor()
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user. Bye.")
         sys.exit(0)

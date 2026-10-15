@@ -84,6 +84,7 @@ Presents a numbered menu:
 [4] Terminal Chess (CLI)  (vs 9Router LLM)
 [5] Run Full Test Suite   (pytest)
 [6] Arena Mode            (Full FSM: human vs LLM + robot)
+[7] Config Editor         (View & edit arena_config)
 [0] Exit
 ```
 
@@ -130,6 +131,17 @@ python3 main.py --mode benchmark
 python3 main.py --mode cli
 python3 main.py --mode cli --model ag/claude-sonnet-4-6
 ```
+
+**Config Editor** — interactive viewer and editor for `config/arena_config.yaml`:
+
+```bash
+python3 main.py --mode config
+# or via interactive menu: select [7]
+```
+
+Presents a submenu to view and edit Robot, Vision, Strategy, and Simulation settings.
+Validates all safety constraints (speeds <= 1.0 m/s, ports 1-65535, etc.) before saving.
+Uses atomic write — original file is never corrupted on error.
 
 **Automated Tests**:
 
@@ -253,6 +265,7 @@ UR-Chess-LLM-Arena/
 │   └── benchmark_board.py      # OpenCV detection benchmark
 ├── src/
 │   ├── config.py               # Typed config dataclasses + loader
+│   ├── config_editor.py        # Interactive config editor (menu [7] / --mode config)
 │   ├── orchestrator/
 │   │   └── master_fsm.py       # Arena FSM (8-state game loop)
 │   ├── robot/
