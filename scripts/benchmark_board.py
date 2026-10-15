@@ -1,11 +1,13 @@
-"""Benchmark real board photo or video: localization, piece detection, FEN validation.
+"""Benchmark real board photo, video, or images directory.
 
 Usage:
     python scripts/benchmark_board.py
-    python scripts/benchmark_board.py --video path/to/Test_video.mp4
+    python scripts/benchmark_board.py --video path/to/video.mp4
+    python scripts/benchmark_board.py --images-dir path/to/images/
 """
 
 from __future__ import annotations
+from typing import Optional
 
 import argparse
 import sys
@@ -15,6 +17,8 @@ from pathlib import Path
 # Ensure repo root is on sys.path so 'from src...' imports resolve
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
+
+from src.vision.piece_detector import TemporalPieceTracker
 
 import cv2
 import numpy as np
@@ -48,6 +52,10 @@ PIECE_MAP: dict[int, tuple[str, str]] = {
     25: ("a7", "p"), 26: ("b7", "p"), 27: ("c7", "p"), 28: ("d7", "p"),
     29: ("e7", "p"), 30: ("f7", "p"), 31: ("g7", "p"), 32: ("h7", "p"),
 }
+
+
+# Valid piece IDs (1-32); anything outside is an off-board false positive
+KNOWN_PIECE_IDS: frozenset[int] = frozenset(PIECE_MAP.keys())
 
 
 def run_mode1(frame: np.ndarray) -> dict:
@@ -311,6 +319,135 @@ def run_video_benchmark(video_path: str) -> int:
     return 0
 
 
+def run_sparse_benchmark(source: str, is_images_dir: bool = False) -> int:
+    """Benchmark single/sparse piece tracking on video or images directory.
+
+    Metrics:
+      - Tracking Continuity Rate (%): frames where at least one valid piece was detected
+      - False Positive Elimination (%): ratio of off-board IDs filtered out
+      - Processing FPS: frames processed per second
+      - Active Board Localization Rate (%): frames where board was localized
+
+    Args:
+        source: path to video file or images directory
+        is_images_dir: True when source is a directory of images
+    """
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+
+    if is_images_dir:
+        source_path = Path(source)
+        if not source_path.is_dir():
+            print(f"ERROR: not a directory: {source}")
+            return 1
+        frames_iter = sorted(
+            p for p in source_path.iterdir() if p.suffix.lower() in IMAGE_EXTS
+        )
+        if not frames_iter:
+            print(f"ERROR: no images found in {source}")
+            return 1
+        print(f"[Sparse Benchmark] Images dir: {source}  ({len(frames_iter)} files)")
+        print()
+
+        def _frame_generator():
+            for p in frames_iter:
+                img = cv2.imread(str(p))
+                if img is not None:
+                    yield img
+    else:
+        cap = cv2.VideoCapture(source)
+        if not cap.isOpened():
+            print(f"ERROR: cannot open video: {source}")
+            return 1
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        src_fps = cap.get(cv2.CAP_PROP_FPS) or 0
+        print(f"[Sparse Benchmark] Video: {source}")
+        print(f"  Source FPS    : {src_fps:.1f}")
+        print(f"  Source frames : {total_frames}")
+        print()
+
+        def _frame_generator():
+            while True:
+                ret, f = cap.read()
+                if not ret:
+                    break
+                yield f
+
+    frames_processed = 0
+    localized_count = 0
+    frames_with_valid_piece = 0  # Tracking Continuity
+    total_raw_detections = 0
+    total_fp_detections = 0      # IDs not in valid sparse set (0-32)
+
+    VALID_SPARSE_IDS: frozenset[int] = frozenset(range(0, 33))
+
+    last_matrix: Optional[np.ndarray] = None
+    last_warped: Optional[np.ndarray] = None
+    tracker = TemporalPieceTracker(ttl=12)
+
+    t_start = time.perf_counter()
+
+    for frame in _frame_generator():
+        frames_processed += 1
+
+        from src.vision.board_locator_grid import localize_board
+        from src.vision.piece_detector import detect_pieces_from_frame
+
+        res = localize_board(frame, verify_grid=False)
+        if res is not None:
+            localized_count += 1
+            last_matrix = res["matrix"]
+            last_warped = res["warped"]
+
+        target_m = res["matrix"] if res is not None else (last_matrix if not is_images_dir else None)
+        target_w = res["warped"] if res is not None else (last_warped if not is_images_dir else None)
+
+        if target_m is not None:
+            matrix = np.array(target_m, dtype=np.float64)
+            all_pieces = detect_pieces_from_frame(frame, matrix, warped=target_w)
+
+            raw_ids = [p["id"] for p in all_pieces]
+            total_raw_detections += len(raw_ids)
+
+            fp_ids = [pid for pid in raw_ids if pid not in VALID_SPARSE_IDS]
+            total_fp_detections += len(fp_ids)
+
+            valid_pieces = [p for p in all_pieces if p["id"] in VALID_SPARSE_IDS]
+            stabilized = tracker.update(valid_pieces)
+            if stabilized:
+                frames_with_valid_piece += 1
+
+    if not is_images_dir:
+        cap.release()  # type: ignore[possibly-undefined]
+
+    elapsed = time.perf_counter() - t_start
+
+    if frames_processed == 0:
+        print("ERROR: no frames read")
+        return 1
+
+    localization_rate = localized_count / frames_processed * 100
+    continuity_rate = frames_with_valid_piece / frames_processed * 100
+    processing_fps = frames_processed / elapsed if elapsed > 0 else 0
+    # FP elimination: what fraction of raw detections were valid (not FP)
+    if total_raw_detections > 0:
+        fp_elim_rate = (1 - total_fp_detections / total_raw_detections) * 100
+    else:
+        fp_elim_rate = 100.0
+
+    print("=" * 60)
+    print("  SPARSE / SINGLE-PIECE BENCHMARK SUMMARY")
+    print("=" * 60)
+    print(f"  Frames processed            : {frames_processed}")
+    print(f"  Active Board Localization   : {localization_rate:.1f}%  ({localized_count}/{frames_processed})")
+    print(f"  Tracking Continuity Rate    : {continuity_rate:.1f}%  ({frames_with_valid_piece}/{frames_processed})")
+    print(f"  False Positive Elimination  : {fp_elim_rate:.1f}%  ({total_raw_detections - total_fp_detections}/{total_raw_detections} valid)")
+    print(f"    Off-board FP IDs seen     : {total_fp_detections} total across all frames")
+    print(f"  Processing FPS              : {processing_fps:.2f}")
+    print(f"  Wall-clock time             : {elapsed:.2f} s")
+    print("=" * 60)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Vision benchmark for board/piece detection")
     parser.add_argument(
@@ -325,9 +462,26 @@ def main() -> int:
         default=None,
         help="Override default test image path (photo benchmark only)",
     )
+    parser.add_argument(
+        "--images-dir",
+        type=str,
+        default=None,
+        help="Directory of images for sparse/single-piece benchmark",
+    )
+    parser.add_argument(
+        "--sparse",
+        action="store_true",
+        default=False,
+        help="Run sparse/single-piece benchmark on --video or --images-dir instead of full-set benchmark",
+    )
     args = parser.parse_args()
 
+    if args.images_dir:
+        return run_sparse_benchmark(args.images_dir, is_images_dir=True)
+
     if args.video:
+        if args.sparse:
+            return run_sparse_benchmark(args.video, is_images_dir=False)
         return run_video_benchmark(args.video)
 
     img_path = args.image or str(_REPO_ROOT / "assets" / "test_board_with_pieces.jpg")

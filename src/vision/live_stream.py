@@ -138,10 +138,13 @@ def _capture_frames(
         raw_pieces: list[dict] = []
         if warped is not None:
             if matrix is not None:
-                # Preferred: detect on full-resolution frame via homography
-                raw_pieces = detect_pieces_from_frame(frame, matrix)
+                # Full-res frame + enhanced board-ROI pass for small markers.
+                # Pass warped so detect_pieces_from_frame can run the 2× Unsharp
+                # Mask third pass board-scoped (no off-board false positives).
+                raw_pieces = detect_pieces_from_frame(frame, matrix, warped=warped)
             else:
-                # ArUco-warped path: detect on warped image directly
+                # ArUco-warped path: detect on warped image directly.
+                # detect_pieces already contains the enhanced-ROI third pass.
                 raw_pieces = piece_detector.detect_pieces(warped)
 
         stabilized = _tracker.update(raw_pieces)

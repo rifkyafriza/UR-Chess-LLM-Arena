@@ -448,4 +448,70 @@
   3. Audit FEN generation and board SVG rendering for accuracy.
   4. Verify full test suite passes.
   5. Produce audit report `docs/AUDIT_VISION_VIDEO_REFINEMENTS.md` with CERTIFIED/APPROVED verdict.
-- **Acceptance Criteria**: Reviewer certifies Phase 7 deliverables and publishes audit report.
+- **Acceptance Criteria**: Reviewer certifies Phase 7 deliverables and publishes audit report. Status: **APPROVED** (`t_d051a2c6`).
+
+---
+
+## Phase 8: Real Arena Field Vision (Two-Stage Board ROI & Unsharp Sharpening)
+
+### Task 12A: Two-Stage Board ROI & Unsharp Sharpening ArUco Pipeline (`src/vision/piece_detector.py`, `src/vision/board_locator_grid.py`)
+- **Assignee**: `vision-dev`
+- **Task ID**: `t_c507ad3b`
+- **Scope**:
+  1. In `src/vision/board_locator_grid.py`:
+     - Enhance `detect_board_corners` to enforce strict aspect-ratio (`ar <= 1.4`) and bounding area limits (`0.03 * H * W` to `0.45 * H * W`) so it isolates the chessboard rather than workbench perimeters.
+     - Provide robust chessboard polygon/ROI extraction.
+  2. In `src/vision/piece_detector.py`:
+     - Implement `enhance_roi(roi, scale=2.0)` applying 2× bicubic upscaling and Unsharp Masking (`cv2.addWeighted(scaled, 1.8, blurred, -0.8, 0)`). Avoid raw high-pass Laplacian filters on textured surfaces.
+     - Tune `_DETECTOR` parameters for small fiducials: `minMarkerPerimeterRate=0.005`, `adaptiveThreshConstant=5` (lowered from default 7 to prevent border bleaching), `adaptiveThreshWinSizeMin=3`, `adaptiveThreshWinSizeMax=23`, `adaptiveThreshWinSizeStep=4`, `perspectiveRemoveIgnoredMarginPerCell=0.13`, `perspectiveRemovePixelPerCell=8`, `cornerRefinementMethod=CORNER_REFINE_SUBPIX`.
+     - Eliminate off-board false positives (e.g. ID 22 outside board) by constraining detections to the board ROI.
+     - Ensure `TemporalPieceTracker` maintains piece persistence across brief hand/gripper occlusions.
+- **Acceptance Criteria**: Detection rate on small overhead tags increases significantly and off-board reflections/tags are strictly eliminated.
+
+### Task 12B: Wire Two-Stage Sharpened Vision Pipeline into Dual-Pane Live Stream (`src/vision/live_stream.py`)
+- **Assignee**: `vision-dev`
+- **Task ID**: `t_7eaad993`
+- **Parent**: `t_c507ad3b`
+- **Scope**:
+  1. Integrate the two-stage ROI + Unsharp Sharpening pipeline into `_capture_frames` in `src/vision/live_stream.py`.
+  2. Ensure small pieces/markers (including single-piece field arena setups) are tracked reliably without frame dropouts.
+  3. Validate that the dual-pane web UI (port 5050) renders the single detected piece accurately on the digital board SVG.
+- **Acceptance Criteria**: Live stream web UI smoothly tracks single or multiple pieces from real field overhead feeds with zero false off-board detections.
+
+### Task 12C: Real Field Video & Test Data Benchmark CLI Support (`scripts/benchmark_board.py` & `main.py`)
+- **Assignee**: `backend-dev`
+- **Task ID**: `t_f19fc0cf`
+- **Parent**: `t_7eaad993`
+- **Scope**:
+  1. Extend `scripts/benchmark_board.py` to evaluate sparse/single-piece real arena datasets:
+     - Metric: Tracking Continuity Rate (%).
+     - Metric: False-Positive Elimination (%).
+     - Metric: Processing FPS and Active Board Localization Rate (%).
+  2. Add `--images-dir` option to process and report benchmarks across directories of test photos.
+  3. Update `main.py` CLI menu and options to easily test field video and image sets.
+- **Acceptance Criteria**: CLI benchmark provides comprehensive metrics for real field datasets.
+
+### Task 12D: Comprehensive Test Suite for Phase 8 Real Field Vision Pipeline (`tests/test_field_vision_pipeline.py`)
+- **Assignee**: `qa-dev`
+- **Task ID**: `t_692de091`
+- **Parent**: `t_f19fc0cf`
+- **Scope**:
+  1. Test board extraction with aspect ratio and area filtering.
+  2. Test ROI enhancement (Unsharp Mask vs raw vs Laplacian) verifying fast execution (<15ms per frame) and clean edge enhancement without texture noise.
+  3. Test small marker detection with tuned detector parameters (IDs 0 and 17).
+  4. Test elimination of off-board markers (e.g. ID 22 outside board bounds).
+  5. Test integration with TemporalPieceTracker and live stream / benchmark components.
+  6. Run full test suite to guarantee 100% green pass.
+- **Acceptance Criteria**: 100% test pass with zero regressions.
+
+### Task 12E: Reviewer Security, Performance & Field Vision Audit (`docs/AUDIT_FIELD_VISION_PIPELINE.md`)
+- **Assignee**: `reviewer`
+- **Task ID**: `t_5e9f02d4`
+- **Parent**: `t_692de091`
+- **Scope**:
+  1. Verify `.gitignore` ignores all video files (`*.mp4`, etc.) and git tracks 0 video files.
+  2. Verify performance: Two-Stage Unsharp Mask pipeline maintains >=10 FPS without high-frequency filter stalls.
+  3. Verify security: input validation on paths, bounds checking on ROI crops, thread safety on shared vision states.
+  4. Verify 100% test pass across entire test suite.
+  5. Produce audit report `docs/AUDIT_FIELD_VISION_PIPELINE.md` with CERTIFIED/APPROVED verdict.
+- **Acceptance Criteria**: Reviewer certifies Phase 8 deliverables and publishes audit report.

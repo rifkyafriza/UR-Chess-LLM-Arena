@@ -72,10 +72,17 @@ def run_live(port: int, camera: int, video_path: str | None = None) -> None:
     start(camera_index=camera, port=port, video_path=video_path)
 
 
-def run_benchmark(video_path: str | None = None) -> None:
-    if video_path:
-        print(f"[BENCHMARK] Running video benchmark on: {video_path}")
-        cmd = [sys.executable, "scripts/benchmark_board.py", "--video", video_path]
+def run_benchmark(video_path: str | None = None, images_dir: str | None = None, sparse: bool = False) -> None:
+    if images_dir:
+        print(f"[BENCHMARK] Sparse benchmark on images dir: {images_dir}")
+        cmd = [sys.executable, "scripts/benchmark_board.py", "--images-dir", images_dir]
+    elif video_path:
+        if sparse:
+            print(f"[BENCHMARK] Sparse benchmark on video: {video_path}")
+            cmd = [sys.executable, "scripts/benchmark_board.py", "--video", video_path, "--sparse"]
+        else:
+            print(f"[BENCHMARK] Running video benchmark on: {video_path}")
+            cmd = [sys.executable, "scripts/benchmark_board.py", "--video", video_path]
     else:
         print("[BENCHMARK] Running OpenCV detection on test board photo...")
         cmd = [sys.executable, "scripts/benchmark_board.py"]
@@ -210,7 +217,9 @@ def interactive_menu() -> None:
             run_live(_DEFAULTS["live_port"], cam_idx)
     elif choice == "3":
         try:
-            bm_choice = input("Benchmark — 1: Static photo, 2: Video file: ").strip()
+            bm_choice = input(
+                "Benchmark — 1: Static photo, 2: Video (full), 3: Video (sparse/field), 4: Images dir (sparse/field): "
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             print("\nBye.")
             sys.exit(0)
@@ -221,6 +230,20 @@ def interactive_menu() -> None:
                 print("\nBye.")
                 sys.exit(0)
             run_benchmark(video_path=bm_video)
+        elif bm_choice == "3":
+            try:
+                bm_video = input("Video file path (field/sparse): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nBye.")
+                sys.exit(0)
+            run_benchmark(video_path=bm_video, sparse=True)
+        elif bm_choice == "4":
+            try:
+                bm_dir = input("Images directory path: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nBye.")
+                sys.exit(0)
+            run_benchmark(images_dir=bm_dir)
         else:
             run_benchmark()
     elif choice == "4":
@@ -272,6 +295,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Video file path for live or benchmark mode (live: loops on EOF; benchmark: per-frame analysis)",
     )
     p.add_argument(
+        "--images-dir",
+        type=str,
+        default=None,
+        help="Images directory for sparse/single-piece benchmark",
+    )
+    p.add_argument(
+        "--sparse",
+        action="store_true",
+        default=False,
+        help="Use sparse/field benchmark metrics when running --mode benchmark",
+    )
+    p.add_argument(
         "--model",
         default="ag/claude-sonnet-4-6",
         help="LLM model name via 9Router (default ag/claude-sonnet-4-6)",
@@ -291,7 +326,7 @@ def main(argv: list[str] | None = None) -> None:
         elif args.mode == "live":
             run_live(args.port or _DEFAULTS["live_port"], args.camera, video_path=args.video)
         elif args.mode == "benchmark":
-            run_benchmark(video_path=args.video)
+            run_benchmark(video_path=args.video, images_dir=args.images_dir, sparse=args.sparse)
         elif args.mode == "cli":
             run_cli(args.model)
         elif args.mode == "test":

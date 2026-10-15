@@ -15,7 +15,7 @@ Pipeline:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 import cv2
 import numpy as np
@@ -48,18 +48,62 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def _detect_folding_board_corners(
+    contours: Sequence[Any],
+    H: int,
+    W: int,
+    max_aspect_ratio: float = 1.4,
+) -> Optional[np.ndarray]:
+    """Detect folding chessboard where center crease splits border into two ~2:1 halves."""
+    halves = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 0.005 * H * W or area > 0.15 * H * W:
+            continue
+        rect = cv2.minAreaRect(cnt)
+        rw, rh = rect[1]
+        if rw <= 0 or rh <= 0:
+            continue
+        ar = max(rw, rh) / min(rw, rh)
+        if 1.5 <= ar <= 2.4:
+            halves.append((area, cnt, rect))
+
+    for i in range(len(halves)):
+        for j in range(i + 1, len(halves)):
+            c1, c2 = halves[i][2][0], halves[j][2][0]
+            dx = abs(c1[0] - c2[0])
+            dy = abs(c1[1] - c2[1])
+            if dx < 40 and 80 < dy < 200:
+                merged = np.vstack([halves[i][1], halves[j][1]])
+                rect_m = cv2.minAreaRect(merged)
+                mw, mh = rect_m[1]
+                if mw > 0 and mh > 0 and max(mw, mh) / min(mw, mh) <= max_aspect_ratio:
+                    box = cv2.boxPoints(rect_m)
+                    return _order_points(box.astype(np.float32))
+    return None
+
+
 def detect_board_corners(
     frame: np.ndarray,
     *,
     canny_low: int = _CANNY_LOW,
     canny_high: int = _CANNY_HIGH,
+    min_area_ratio: float = 0.03,
+    max_area_ratio: float = 0.45,
+    max_aspect_ratio: float = 1.4,
 ) -> Optional[np.ndarray]:
     """Detect the four outer corners of the chess board in *frame*.
 
+    Enforces strict aspect-ratio and area bounds so the detector does not
+    falsely latch onto the full workbench/table edge or tiny noise contours.
+
     Args:
-        frame:      BGR or grayscale image (H×W×3 or H×W).
-        canny_low:  Lower Canny threshold.
-        canny_high: Upper Canny threshold.
+        frame:            BGR or grayscale image (H×W×3 or H×W).
+        canny_low:        Lower Canny threshold.
+        canny_high:       Upper Canny threshold.
+        min_area_ratio:   Min contour area as fraction of frame area (default 0.03).
+        max_area_ratio:   Max contour area as fraction of frame area (default 0.45).
+        max_aspect_ratio: Max width/height ratio of bounding rect (default 1.4).
 
     Returns:
         Float32 (4,2) array of [TL, TR, BR, BL] pixel coordinates in *frame*,
@@ -70,46 +114,69 @@ def detect_board_corners(
         return None
 
     gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, canny_low, canny_high)
 
-    edges = cv2.Canny(gray, canny_low, canny_high)
+    H, W = gray.shape[:2]
+    frame_area = H * W
+    min_area = min_area_ratio * frame_area
+    max_area = max_area_ratio * frame_area
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # RETR_TREE catches inner framing contours when the outer border is broken.
+    contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         logger.debug("detect_board_corners: no contours found")
         return None
 
-    # Sort descending by area; take first 4-vertex contour large enough.
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    H, W = gray.shape[:2]
-    min_full_board_area = 0.20 * H * W
-
-    for cnt in contours:
+    for cnt in sorted(contours, key=cv2.contourArea, reverse=True):
         area = cv2.contourArea(cnt)
-        if area < min_full_board_area:
-            break
+        if area > max_area:
+            continue  # Whole table/workbench — skip.
+        if area < min_area:
+            break  # Remaining contours only get smaller.
         peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, _POLY_EPSILON * peri, True)
-        if len(approx) == 4:
-            pts = approx.reshape(4, 2).astype(np.float32)
-            return _order_points(pts)
+        rect = cv2.minAreaRect(cnt)
+        rw, rh = rect[1]
+        if rw <= 0 or rh <= 0:
+            continue
+        if max(rw, rh) / min(rw, rh) > max_aspect_ratio:
+            continue  # Non-square (table edge, cable, etc.) — skip.
 
-    # Fallback for boards with pieces: Morphological close connects alternating squares
+        # Try standard and slightly relaxed polygon approximation (for folding creases)
+        for eps in (_POLY_EPSILON, 0.03, 0.035, 0.04):
+            approx = cv2.approxPolyDP(cnt, eps * peri, True)
+            if len(approx) == 4:
+                pts = approx.reshape(4, 2).astype(np.float32)
+                return _order_points(pts)
+
+    # Secondary pass for folding chessboards (two 2:1 halves split by hinge crease)
+    folding_corners = _detect_folding_board_corners(contours, H, W, max_aspect_ratio=max_aspect_ratio)
+    if folding_corners is not None:
+        return folding_corners
+
+    # Fallback: morphological close to merge alternating dark squares.
     k_size = max(15, int(min(H, W) * 0.12))
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
     _, bin_dark = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
     closed = cv2.morphologyEx(bin_dark, cv2.MORPH_CLOSE, kernel)
 
     closed_cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    morph_max_area = 0.80 * frame_area  # Looser bound for morphological blob (includes padding).
     for cnt in sorted(closed_cnts, key=cv2.contourArea, reverse=True):
-        if cv2.contourArea(cnt) > min_full_board_area:
-            rect = cv2.minAreaRect(cnt)
-            box = cv2.boxPoints(rect).astype(np.float32)
-            ordered_box = _order_points(box)
-            # Refine edges against outer framing lines
-            refined = _refine_grid_border(gray, ordered_box)
-            return refined
+        area = cv2.contourArea(cnt)
+        if area < min_area or area > morph_max_area:
+            continue
+        rect = cv2.minAreaRect(cnt)
+        rw, rh = rect[1]
+        if rw <= 0 or rh <= 0:
+            continue
+        if max(rw, rh) / min(rw, rh) > max_aspect_ratio:
+            continue
+        box = cv2.boxPoints(rect).astype(np.float32)
+        ordered_box = _order_points(box)
+        return _refine_grid_border(gray, ordered_box)
 
-    logger.warning("detect_board_corners: no 4-vertex contour found")
+    logger.warning("detect_board_corners: no valid 4-vertex contour found")
     return None
 
 
@@ -218,12 +285,7 @@ def localize_board(
         return None
 
     corners = detect_board_corners(frame, canny_low=canny_low, canny_high=canny_high)
-    valid_corners = False
-    if corners is not None:
-        rect = cv2.minAreaRect(corners)
-        w, h = rect[1]
-        if w > 0 and h > 0 and (max(w, h) / min(w, h)) <= 1.45:
-            valid_corners = True
+    valid_corners = corners is not None
 
     if valid_corners and corners is not None:
         warped, M = warp_board(frame, corners, output_size=output_size)

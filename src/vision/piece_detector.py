@@ -57,20 +57,20 @@ _aruco_dict = cv2.aruco.getPredefinedDictionary(_DICT_ID)
 
 def _build_params() -> cv2.aruco.DetectorParameters:
     p = cv2.aruco.DetectorParameters()
-    # Adaptive threshold: wider window range catches markers at varied sizes
+    # Adaptive threshold: tighter window prevents border bleaching on white tiles
     p.adaptiveThreshWinSizeMin = 3
-    p.adaptiveThreshWinSizeMax = 53
+    p.adaptiveThreshWinSizeMax = 23
     p.adaptiveThreshWinSizeStep = 4
-    p.adaptiveThreshConstant = 7
+    p.adaptiveThreshConstant = 5  # Lowered from 7: prevents 1-px black border breach
     # Subpixel corner refinement for sub-pixel accuracy
     p.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
     p.cornerRefinementWinSize = 5
     p.cornerRefinementMaxIterations = 30
     p.cornerRefinementMinAccuracy = 0.1
-    # Relax min perimeter to detect small markers at distance
-    p.minMarkerPerimeterRate = 0.02
+    # Allow small markers (<30 px perimeter) at distance/overhead mount
+    p.minMarkerPerimeterRate = 0.005
     p.maxMarkerPerimeterRate = 4.0
-    # Perspective remove for border check
+    # Clean bit extraction — border margin prevents leakage into bit area
     p.perspectiveRemovePixelPerCell = 8
     p.perspectiveRemoveIgnoredMarginPerCell = 0.13
     # Error correction
@@ -84,6 +84,28 @@ _DETECTOR = cv2.aruco.ArucoDetector(_aruco_dict, _params)
 
 # CLAHE for contrast enhancement on low-light / uneven frames
 _CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
+def enhance_roi(roi: np.ndarray, scale: float = 2.0) -> np.ndarray:
+    """Upscale ROI and apply Unsharp Mask to restore crisp fiducial bit boundaries.
+
+    Uses bicubic interpolation + Gaussian-subtraction sharpening.
+    Never uses Laplacian kernels — those create thousands of micro-quadrilateral
+    noise contours on wood-grain or textured board surfaces.
+
+    Args:
+        roi:   BGR or grayscale crop of the board area.
+        scale: Upscale factor (default 2.0×).
+
+    Returns:
+        Grayscale enhanced image at (roi.h * scale) × (roi.w * scale).
+    """
+    scaled = cv2.resize(roi, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    blurred = cv2.GaussianBlur(scaled, (0, 0), sigmaX=1.5)
+    sharpened = cv2.addWeighted(scaled, 1.8, blurred, -0.8, 0)
+    if sharpened.ndim == 3:
+        return cv2.cvtColor(sharpened, cv2.COLOR_BGR2GRAY)
+    return sharpened
 
 
 def _enhance_gray(gray: np.ndarray) -> np.ndarray:
@@ -162,6 +184,30 @@ def detect_pieces(
     gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
     corners_list, ids = _detect_raw(gray)
 
+    # Third pass: unsharp-masked 2× upscale for small/distant markers.
+    # Board already warped → detection is board-scoped → no off-board FP risk.
+    enhanced = enhance_roi(warped, scale=2.0)
+    corners3, ids3, _ = _DETECTOR.detectMarkers(enhanced)
+    if ids3 is not None:
+        scale_inv = 0.5  # Map coords back to 800×800 space.
+        if ids is None:
+            merged_corners: list = []
+            merged_ids: list[int] = []
+            seen_ids: set[int] = set()
+        else:
+            merged_corners = list(corners_list)
+            merged_ids = ids.flatten().tolist()
+            seen_ids = set(merged_ids)
+        for c, mid in zip(corners3, ids3.flatten()):
+            mid = int(mid)
+            if mid not in seen_ids:
+                seen_ids.add(mid)
+                merged_corners.append((c * scale_inv).reshape(1, 4, 2))
+                merged_ids.append(mid)
+        if merged_ids:
+            corners_list = merged_corners
+            ids = np.array(merged_ids).reshape(-1, 1)
+
     pieces: list[dict] = []
     if ids is None or len(ids) == 0:
         return pieces
@@ -195,12 +241,24 @@ def detect_pieces_from_frame(
     flipped: bool = False,
     id_min: int = PIECE_ID_MIN,
     id_max: int = PIECE_ID_MAX,
+    warped: np.ndarray | None = None,
 ) -> list[dict]:
     """Detect piece ArUco markers on the original full-resolution camera frame.
 
     Projects detected marker centers through perspective transform *matrix*
     to determine algebraic square coordinates. Preserves full resolution
     and avoids bilinear downsampling artifacts on dark squares.
+
+    Parameters
+    ----------
+    warped:
+        Optional pre-warped board image (output_size × output_size BGR).
+        When provided, an additional enhanced-ROI pass runs on the board crop
+        (bicubic 2× + Unsharp Mask) to catch small/distant markers that the
+        full-frame pass misses.  Detections are board-scoped (no off-board FP).
+        Marker centers in the 2× enhanced space are scaled back to warped
+        coordinates and stored directly as ``center``; no full-frame projection
+        needed for those entries.
     """
     assert frame is not None and frame.ndim == 3, "frame must be a valid BGR image"
     assert matrix is not None and matrix.shape == (3, 3), "matrix must be a 3x3 homography"
@@ -208,31 +266,61 @@ def detect_pieces_from_frame(
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     corners_list, ids = _detect_raw(gray)
 
-    pieces: list[dict] = []
-    if ids is None or len(ids) == 0:
-        return pieces
+    # Collect seen IDs from the full-frame pass.
+    seen_ids: set[int] = set(ids.flatten().tolist()) if ids is not None else set()
 
-    for marker_corners, marker_id in zip(corners_list, ids.flatten()):
-        mid = int(marker_id)
-        if not (id_min <= mid <= id_max):
-            continue
-        cx_raw, cy_raw = marker_corners[0].mean(axis=0)
-        pt = np.array([[[cx_raw, cy_raw]]], dtype=np.float32)
-        wpt = cv2.perspectiveTransform(pt, matrix)[0][0]
-        wx, wy = float(wpt[0]), float(wpt[1])
-        square, col, row = pixel_to_square(wx, wy, output_size=output_size, flipped=flipped)
-        pieces.append(
-            {
-                "id": mid,
-                "square": square,
-                "col": col,
-                "row": row,
-                "center": (wx, wy),
-                "raw_center": (float(cx_raw), float(cy_raw)),
-                "raw_corners": marker_corners[0].tolist(),
-                "piece": ID_TO_PIECE_CHAR.get(mid, "P" if mid <= 16 else "p"),
-            }
-        )
+    pieces: list[dict] = []
+    if ids is not None and len(ids) > 0:
+        for marker_corners, marker_id in zip(corners_list, ids.flatten()):
+            mid = int(marker_id)
+            if not (id_min <= mid <= id_max):
+                continue
+            cx_raw, cy_raw = marker_corners[0].mean(axis=0)
+            pt = np.array([[[cx_raw, cy_raw]]], dtype=np.float32)
+            wpt = cv2.perspectiveTransform(pt, matrix)[0][0]
+            wx, wy = float(wpt[0]), float(wpt[1])
+            if not (0.0 <= wx < output_size and 0.0 <= wy < output_size):
+                continue  # Off-board marker: pixel_to_square would clamp it onto an edge square.
+            square, col, row = pixel_to_square(wx, wy, output_size=output_size, flipped=flipped)
+            pieces.append(
+                {
+                    "id": mid,
+                    "square": square,
+                    "col": col,
+                    "row": row,
+                    "center": (wx, wy),
+                    "raw_center": (float(cx_raw), float(cy_raw)),
+                    "raw_corners": marker_corners[0].tolist(),
+                    "piece": ID_TO_PIECE_CHAR.get(mid, "P" if mid <= 16 else "p"),
+                }
+            )
+
+    # Third pass: enhanced board-scoped ROI (Unsharp Mask 2×) for small markers.
+    # Requires the warped board image; produces no off-board false positives.
+    if warped is not None and warped.ndim == 3:
+        enhanced = enhance_roi(warped, scale=2.0)  # grayscale, 2× size
+        scale_inv = 0.5
+        corners3, ids3, _ = _DETECTOR.detectMarkers(enhanced)
+        if ids3 is not None:
+            for c, mid3 in zip(corners3, ids3.flatten()):
+                mid3 = int(mid3)
+                if mid3 in seen_ids or not (id_min <= mid3 <= id_max):
+                    continue
+                seen_ids.add(mid3)
+                # Scale corners back to warped (output_size) coordinate space.
+                wx, wy = (c[0] * scale_inv).mean(axis=0)
+                wx, wy = float(wx), float(wy)
+                square, col, row = pixel_to_square(wx, wy, output_size=output_size, flipped=flipped)
+                pieces.append(
+                    {
+                        "id": mid3,
+                        "square": square,
+                        "col": col,
+                        "row": row,
+                        "center": (wx, wy),
+                        "piece": ID_TO_PIECE_CHAR.get(mid3, "P" if mid3 <= 16 else "p"),
+                    }
+                )
 
     return pieces
 

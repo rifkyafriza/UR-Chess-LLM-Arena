@@ -19,13 +19,13 @@ class TestBenchmarkMainParser(unittest.TestCase):
         import main as m
         with patch.object(m, "run_benchmark") as mock_rb:
             m.main(["--mode", "benchmark"])
-            mock_rb.assert_called_once_with(video_path=None)
+            mock_rb.assert_called_once_with(video_path=None, images_dir=None, sparse=False)
 
     def test_benchmark_with_video_passes_path(self):
         import main as m
         with patch.object(m, "run_benchmark") as mock_rb:
             m.main(["--mode", "benchmark", "--video", "/tmp/test.mp4"])
-            mock_rb.assert_called_once_with(video_path="/tmp/test.mp4")
+            mock_rb.assert_called_once_with(video_path="/tmp/test.mp4", images_dir=None, sparse=False)
 
 
 class TestRunBenchmarkDispatch(unittest.TestCase):

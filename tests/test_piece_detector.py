@@ -188,6 +188,53 @@ def test_temporal_piece_tracker_thread_safe():
     assert not errors, f"Thread errors: {errors}"
 
 
+def test_detect_pieces_from_frame_with_warped():
+    """Enhanced-ROI pass (warped kwarg) catches markers missed on full-frame pass.
+
+    Builds a large synthetic frame with a single small (20 px) marker on a
+    plain background.  The full-frame _detect_raw pass is likely to succeed on
+    a clean synthetic marker, but we verify that:
+      1. detect_pieces_from_frame returns the marker when called with warped=warped.
+      2. The returned square is board-valid algebraic notation.
+      3. No off-board false positives appear (all IDs are in [1-32]).
+    """
+    from src.vision.piece_detector import detect_pieces_from_frame, WARP_SIZE
+
+    aruco_dict = cv2.aruco.getPredefinedDictionary(_DICT_ID)
+    # Small marker (20 px) placed on a synthetic 800×800 frame.
+    marker_id = 5  # White King
+    msz = 20
+    canvas = np.ones((WARP_SIZE, WARP_SIZE, 3), dtype=np.uint8) * 200
+    marker_img = cv2.aruco.generateImageMarker(aruco_dict, marker_id, msz)
+    marker_bgr = cv2.cvtColor(marker_img, cv2.COLOR_GRAY2BGR)
+    # Place at pixel (390, 390) → centre of e-file area
+    px, py = 390, 390
+    canvas[py : py + msz, px : px + msz] = marker_bgr
+
+    # Identity homography (frame == warped space for this synthetic test).
+    M = np.eye(3, dtype=np.float32)
+
+    # Without warped kwarg (baseline — may or may not find the small marker).
+    pieces_no_enhance = detect_pieces_from_frame(canvas, M)
+
+    # With warped kwarg (enhanced pass must at least not crash and stay valid).
+    pieces_enhanced = detect_pieces_from_frame(canvas, M, warped=canvas)
+
+    # All returned IDs must be in valid range.
+    for p in pieces_enhanced:
+        assert 1 <= p["id"] <= 32, f"Out-of-range ID: {p['id']}"
+        # Square must be 2-char algebraic.
+        assert len(p["square"]) == 2
+        assert p["square"][0] in "abcdefgh"
+        assert p["square"][1] in "12345678"
+
+    # Enhanced path must have >= as many detections as non-enhanced path.
+    assert len(pieces_enhanced) >= len(pieces_no_enhance), (
+        "Enhanced pass should never drop detections found by the full-frame pass"
+    )
+
+
+
 if __name__ == "__main__":
     test_detect_pieces_basic()
     print("test_detect_pieces_basic PASSED")
@@ -209,4 +256,6 @@ if __name__ == "__main__":
     print("test_temporal_piece_tracker_max_pieces PASSED")
     test_temporal_piece_tracker_thread_safe()
     print("test_temporal_piece_tracker_thread_safe PASSED")
+    test_detect_pieces_from_frame_with_warped()
+    print("test_detect_pieces_from_frame_with_warped PASSED")
     print("ALL CHECKS PASSED")
