@@ -314,4 +314,54 @@
   3. Verify dual-pane live stream functionality and HTML injection safety.
   4. Verify interactive and non-interactive launcher robustness.
   5. Verify full test suite passing status and produce `docs/AUDIT_PHASE5_REFINEMENTS.md`.
-- **Acceptance Criteria**: Reviewer certifies Phase 5 deliverables with APPROVED status.
+- **Acceptance Criteria**: Reviewer certifies Phase 5 deliverables with APPROVED status. Status: **APPROVED** (`t_ddda4e5b`).
+
+### Task 10A: Implement Interactive Arena Config Editor (`src/config_editor.py` & `main.py`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 9E (`t_ddda4e5b`)
+- **Scope**:
+  1. Implement `src/config_editor.py`:
+     - Load active configuration using `src.config.load_config()`.
+     - Provide interactive text menu to:
+       - View current configuration formatted cleanly.
+       - Edit Robot settings: mode (`sim` / `real`), host IP, move_velocity, move_acceleration.
+       - Edit Vision settings: camera_index, locator_mode (`aruco` / `contour`), stream_port.
+       - Edit Strategy settings: model name, api_base, timeout.
+       - Edit Simulation settings: host, port.
+     - Validate all user modifications through `src.config._validate()` before writing.
+     - Safely serialize and persist changes to `config/arena_config.yaml` using PyYAML.
+     - Add helper function `interactive_config_editor(config_path: Optional[str] = None) -> None`.
+  2. Integrate into `main.py`:
+     - Update interactive menu with option `[7] Config Editor (View & edit arena_config)`.
+     - Update valid choices `0-7`.
+     - Add `--mode config` CLI flag to argument parser to launch config editor directly.
+  3. Update `README.md` to document the new config editor option and CLI command.
+- **Acceptance Criteria**: Running `python3 main.py` and choosing 7 opens config editor; modifying a value validates and saves to `config/arena_config.yaml`; invalid inputs are safely rejected.
+
+### Task 10B: Comprehensive Test Suite for Interactive Config Editor (`tests/test_config_editor.py`)
+- **Assignee**: `qa-dev`
+- **Parent**: Task 10A
+- **Scope**:
+  1. Test `src/config_editor.py`:
+     - Test viewing current config output.
+     - Test updating robot parameters (mode, host, speed) with file persistence.
+     - Test updating vision parameters (camera_index, stream_port, locator_mode).
+     - Test updating strategy parameters (model, timeout, api_base).
+     - Test updating simulation parameters (port).
+     - Test invalid inputs (negative speeds, out-of-range ports, invalid modes) are rejected without corrupting config file.
+  2. Test `main.py` launcher integration:
+     - Test interactive menu option `7` dispatches `run_config()`.
+     - Test `--mode config` flag dispatches `run_config()`.
+  3. Ensure 100% test pass rate across the entire test suite.
+- **Acceptance Criteria**: Comprehensive test coverage with 0 failures in pytest.
+
+### Task 10C: Reviewer Security, Validation & Persistence Audit (`docs/AUDIT_CONFIG_EDITOR.md`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 10B
+- **Scope**:
+  1. Audit `src/config_editor.py` for safe YAML serialization (no arbitrary object execution, safe loading/dumping).
+  2. Verify input validation enforces safety bounds (speed caps, valid IP formats, port ranges).
+  3. Verify file permissions and safe atomic writing of `arena_config.yaml`.
+  4. Verify complete test suite passing status.
+  5. Produce audit report `docs/AUDIT_CONFIG_EDITOR.md` and provide CERTIFIED/APPROVED verdict.
+- **Acceptance Criteria**: Reviewer certifies config editor safety and publishes audit report.
