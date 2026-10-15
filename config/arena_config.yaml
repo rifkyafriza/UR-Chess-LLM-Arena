@@ -32,7 +32,7 @@ robot:
 
 vision:
   camera_index: 0
-  locator_mode: aruco           # "contour" | "aruco"
+  locator_mode: contour         # "contour" | "aruco"
   aruco_dict: DICT_4X4_50
   resolution: [1280, 720]
   stream_port: 5050

@@ -40,7 +40,7 @@ class TestRunLive:
             with patch.object(main, "_port_busy", return_value=False):
                 main.run_live(port=5050, camera=0)
 
-        mock_start.assert_called_once_with(camera_index=0, port=5050)
+        mock_start.assert_called_once_with(camera_index=0, port=5050, video_path=None)
 
     def test_calls_start_custom_camera_and_port(self):
         """run_live forwards custom camera index and port to start()."""
@@ -57,7 +57,7 @@ class TestRunLive:
             with patch.object(main, "_port_busy", return_value=False):
                 main.run_live(port=6060, camera=2)
 
-        mock_start.assert_called_once_with(camera_index=2, port=6060)
+        mock_start.assert_called_once_with(camera_index=2, port=6060, video_path=None)
 
     def test_exits_when_port_busy(self):
         """run_live exits with error when port already in use."""
@@ -75,13 +75,15 @@ class TestRunLive:
         assert "vision_app" not in source, "vision_app NameError regression detected in run_live()"
 
     def test_interactive_menu_option2_passes_defaults(self):
-        """Menu option [2] calls run_live with live_port=5050, camera=0."""
+        """Menu option [2] with webcam source calls run_live with live_port and camera defaults."""
         import main
         import importlib
         importlib.reload(main)
 
+        # First input: menu choice "2"; second input: source "1" (webcam, default index)
+        input_seq = iter(["2", "1"])
         with (
-            patch("builtins.input", return_value="2"),
+            patch("builtins.input", side_effect=input_seq),
             patch.object(main, "run_live") as mock_run_live,
         ):
             try:

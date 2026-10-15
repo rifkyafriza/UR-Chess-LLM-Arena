@@ -79,7 +79,7 @@ class RobotConfig:
 @dataclass
 class VisionConfig:
     camera_index: int = 0
-    locator_mode: str = "aruco"          # "contour" | "aruco"
+    locator_mode: str = "contour"        # "contour" | "aruco"
     aruco_dict: str = "DICT_4X4_50"
     resolution: Tuple[int, int] = (1280, 720)
     stream_port: int = 5050
@@ -174,7 +174,7 @@ def _build_vision(d: dict) -> VisionConfig:
     res = d.get("resolution", [1280, 720])
     return VisionConfig(
         camera_index=int(d.get("camera_index", 0)),
-        locator_mode=str(d.get("locator_mode", "aruco")),
+        locator_mode=str(d.get("locator_mode", "contour")),
         aruco_dict=str(d.get("aruco_dict", "DICT_4X4_50")),
         resolution=_tuple_pair(res, int),
         stream_port=int(d.get("stream_port", 5050)),

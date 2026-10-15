@@ -218,18 +218,90 @@ def localize_board(
         return None
 
     corners = detect_board_corners(frame, canny_low=canny_low, canny_high=canny_high)
-    if corners is None:
+    valid_corners = False
+    if corners is not None:
+        rect = cv2.minAreaRect(corners)
+        w, h = rect[1]
+        if w > 0 and h > 0 and (max(w, h) / min(w, h)) <= 1.45:
+            valid_corners = True
+
+    if valid_corners and corners is not None:
+        warped, M = warp_board(frame, corners, output_size=output_size)
+        verified = False
+        if verify_grid:
+            verified = _verify_alternating_grid(warped, output_size)
+            if not verified:
+                logger.warning("localize_board: alternating grid verification failed")
+        if not verify_grid or verified:
+            return {"warped": warped, "corners": corners, "matrix": M, "verified": verified}
+
+    # Marker-assisted fallback for boards with piece ArUco tags or non-ideal lighting/borders
+    marker_res = _localize_from_markers(frame, output_size=output_size)
+    if marker_res is not None:
+        return marker_res
+
+    if corners is not None:
+        warped, M = warp_board(frame, corners, output_size=output_size)
+        return {"warped": warped, "corners": corners, "matrix": M, "verified": False}
+
+    return None
+
+
+def _localize_from_markers(frame: np.ndarray, output_size: int = OUTPUT_SIZE) -> Optional[dict]:
+    """Fallback: Estimate board perspective transform from piece ArUco markers."""
+    try:
+        from src.vision.piece_detector import _DETECTOR
+    except ImportError:
         return None
 
-    warped, M = warp_board(frame, corners, output_size=output_size)
+    gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    corners_list, ids, _ = _DETECTOR.detectMarkers(gray)
+    if ids is None or len(ids) < 4:
+        return None
 
-    verified = False
-    if verify_grid:
-        verified = _verify_alternating_grid(warped, output_size)
-        if not verified:
-            logger.warning("localize_board: alternating grid verification failed")
+    # Standard starting square mapping for piece IDs 1-32: (col 0-7, row 0-7)
+    _START_SQUARES = {
+        1: (0, 7), 2: (1, 7), 3: (2, 7), 4: (3, 7), 5: (4, 7), 6: (5, 7), 7: (6, 7), 8: (7, 7),
+        9: (0, 6), 10: (1, 6), 11: (2, 6), 12: (3, 6), 13: (4, 6), 14: (5, 6), 15: (6, 6), 16: (7, 6),
+        17: (0, 0), 18: (1, 0), 19: (2, 0), 20: (3, 0), 21: (4, 0), 22: (5, 0), 23: (6, 0), 24: (7, 0),
+        25: (0, 1), 26: (1, 1), 27: (2, 1), 28: (3, 1), 29: (4, 1), 30: (5, 1), 31: (6, 1), 32: (7, 1),
+    }
 
-    return {"warped": warped, "corners": corners, "matrix": M, "verified": verified}
+    cell = output_size / 8.0
+    src_pts, dst_pts = [], []
+    for marker_corners, mid in zip(corners_list, ids.flatten()):
+        mid = int(mid)
+        if mid not in _START_SQUARES:
+            continue
+        col, row = _START_SQUARES[mid]
+        dst_x = (col + 0.5) * cell
+        dst_y = (row + 0.5) * cell
+        src_pts.append(marker_corners[0].mean(axis=0))
+        dst_pts.append([dst_x, dst_y])
+
+    if len(src_pts) < 4:
+        return None
+
+    M, _ = cv2.findHomography(
+        np.array(src_pts, dtype=np.float32),
+        np.array(dst_pts, dtype=np.float32),
+        cv2.RANSAC,
+    )
+    if M is None:
+        return None
+
+    warped = cv2.warpPerspective(frame, M, (output_size, output_size))
+    try:
+        M_inv = np.linalg.inv(M)
+        c_pts = np.array(
+            [[0, 0], [output_size, 0], [output_size, output_size], [0, output_size]],
+            dtype=np.float32,
+        )
+        corners_f = cv2.perspectiveTransform(c_pts.reshape(1, 4, 2), M_inv)[0]
+    except Exception:
+        corners_f = np.zeros((4, 2), dtype=np.float32)
+
+    return {"warped": warped, "corners": corners_f, "matrix": M, "verified": True}
 
 
 def _verify_alternating_grid(warped: np.ndarray, output_size: int) -> bool:

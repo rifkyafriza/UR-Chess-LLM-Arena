@@ -1,4 +1,4 @@
-"""Live camera web stream with ArUco HUD overlay and dual-pane SVG board.
+"""Live camera / video-file web stream with ArUco HUD overlay and dual-pane SVG board.
 
 Flask MJPEG server:
     GET /          — HTML dual-pane viewer (camera + SVG board)
@@ -7,15 +7,17 @@ Flask MJPEG server:
     GET /board_svg — Raw SVG of current recognized position
 
 Detection pipeline per frame:
-    1. Try ArUco corner markers (IDs 40-43) → board_locator_aruco.locate_board
-    2. Fallback: contour grid detection  → board_locator_grid.localize_board
-    3. Detect piece markers (IDs 1-32)   → piece_detector.detect_pieces
-    4. Generate FEN + SVG from board state
-    5. Render HUD overlay on raw frame
-    6. JPEG-encode and push to MJPEG boundary
+    1. Contour grid detection  → board_locator_grid.localize_board  (primary)
+    2. Fallback: ArUco corner markers (IDs 40-43) → board_locator_aruco.locate_board
+    3. Detect piece markers (IDs 1-32) on full-resolution frame via homography matrix
+    4. Stabilize via TemporalPieceTracker; build piece-type board state
+    5. Generate FEN + SVG from board state
+    6. Render HUD overlay on raw frame
+    7. JPEG-encode and push to MJPEG boundary
 
 Run:
     python -m src.vision.live_stream [--camera 0] [--port 5050]
+    python -m src.vision.live_stream --video path/to/video.mp4 [--port 5050]
 """
 
 from __future__ import annotations
@@ -33,10 +35,12 @@ import numpy as np
 from flask import Flask, Response, jsonify
 
 from src.vision import board_locator_aruco, board_locator_grid, piece_detector
+from src.vision.piece_detector import (
+    TemporalPieceTracker,
+    build_piece_type_board_state,
+    detect_pieces_from_frame,
+)
 from src.vision.fen_serializer import serialize_fen
-
-# Map detector color labels to FEN piece chars (pawn placeholder; no type info)
-_COLOR_TO_FEN: dict[str, str] = {"white": "P", "black": "p"}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -53,59 +57,99 @@ _mode: str                   = "none"   # "aruco" | "grid" | "none"
 _current_fen: str            = ""
 _current_svg: str            = ""
 
+# ── Temporal tracker singleton (lives for the lifetime of the stream) ─────────
+
+_tracker = TemporalPieceTracker(ttl=8, max_pieces=32)
+
 # ── Capture thread ────────────────────────────────────────────────────────────
 
-def _capture_loop(camera_index: int) -> None:
-    """Background thread: capture, detect, encode."""
-    global _jpeg_bytes, _board_state, _mode
-
-    cap = cv2.VideoCapture(camera_index)
+def _open_source(camera_index: Optional[int], video_path: Optional[str]) -> cv2.VideoCapture:
+    """Open camera index or video file; raise RuntimeError on failure."""
+    if video_path:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video file: {video_path}")
+        return cap
+    idx = camera_index if camera_index is not None else 0
+    cap = cv2.VideoCapture(idx)
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open camera index {camera_index}")
+        raise RuntimeError(f"Cannot open camera index {idx}")
+    return cap
 
-    t_next = time.monotonic()
 
+def _capture_loop(
+    camera_index: Optional[int] = 0,
+    video_path: Optional[str] = None,
+) -> None:
+    """Background thread: capture, detect, encode."""
+    cap = _open_source(camera_index, video_path)
+    is_video = bool(video_path)
     try:
-        _capture_frames(cap, t_next)
+        _capture_frames(cap, is_video=is_video, video_path=video_path)
     finally:
         cap.release()
 
 
-def _capture_frames(cap, t_next: float) -> None:
+def _capture_frames(
+    cap: cv2.VideoCapture,
+    *,
+    is_video: bool = False,
+    video_path: Optional[str] = None,
+) -> None:
     global _jpeg_bytes, _board_state, _mode, _current_fen, _current_svg
+
+    t_next = time.monotonic()
+
     while True:
         ok, frame = cap.read()
+
+        # Loop video on EOF
+        if (not ok or frame is None) and is_video and video_path:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = cap.read()
+
         if not ok or frame is None:
             time.sleep(0.05)
             continue
 
         warped: Optional[np.ndarray] = None
+        matrix: Optional[np.ndarray] = None
         detected_corners: dict       = {}
         current_mode                 = "none"
 
-        # --- Mode 1: ArUco corner markers ---
-        warped_aruco, detected_corners = board_locator_aruco.locate_board(frame)
-        if warped_aruco is not None:
-            warped        = warped_aruco
-            current_mode  = "aruco"
+        # --- Mode 1: contour grid (primary) ---
+        grid_result = board_locator_grid.localize_board(frame)
+        if grid_result is not None:
+            warped       = grid_result["warped"]
+            matrix       = grid_result["matrix"]
+            current_mode = "grid"
 
-        # --- Mode 2: contour grid fallback ---
+        # --- Mode 2: ArUco corner markers (fallback when grid fails) ---
         if warped is None:
-            result = board_locator_grid.localize_board(frame)
-            if result is not None:
-                warped       = result["warped"]
-                current_mode = "grid"
+            warped_aruco, detected_corners = board_locator_aruco.locate_board(frame)
+            if warped_aruco is not None:
+                # board_locator_aruco does not expose matrix; warp is pre-computed.
+                # Use the warped image for piece detection via detect_pieces.
+                warped       = warped_aruco
+                current_mode = "aruco"
+                matrix       = None  # will use detect_pieces(warped) path below
 
-        # --- Piece detection on warped board ---
-        pieces: list[dict] = []
+        # --- Piece detection ---
+        raw_pieces: list[dict] = []
         if warped is not None:
-            pieces = piece_detector.detect_pieces(warped)
+            if matrix is not None:
+                # Preferred: detect on full-resolution frame via homography
+                raw_pieces = detect_pieces_from_frame(frame, matrix)
+            else:
+                # ArUco-warped path: detect on warped image directly
+                raw_pieces = piece_detector.detect_pieces(warped)
 
-        board_state = piece_detector.build_board_state(pieces)
+        stabilized = _tracker.update(raw_pieces)
 
-        # --- Generate FEN + SVG from detected board state ---
-        fen_board_state = {sq: _COLOR_TO_FEN[color] for sq, color in board_state.items()}
-        fen = serialize_fen(fen_board_state) if fen_board_state else ""
+        # --- Board state and FEN/SVG ---
+        board_state = build_piece_type_board_state(stabilized)
+
+        fen = serialize_fen(board_state) if board_state else ""
         try:
             chess_board = chess.Board(fen) if fen else chess.Board(None)
             svg = chess.svg.board(chess_board, size=400)
@@ -115,20 +159,19 @@ def _capture_frames(cap, t_next: float) -> None:
         # --- HUD overlay on raw frame ---
         vis = frame.copy()
 
-        # Draw ArUco corner markers (mode 1)
+        # Draw ArUco corner markers (aruco fallback path)
         if detected_corners:
             vis = board_locator_aruco.draw_detections(vis, detected_corners)
 
-        # Draw piece overlay on warped (then stamp thumbnail on frame)
-        if warped is not None and pieces:
-            warped_hud = piece_detector.draw_pieces(warped, pieces)
-            # Thumbnail: 200×200 in bottom-right corner
+        # Draw piece overlay on warped (stamp thumbnail on frame)
+        if warped is not None and stabilized:
+            warped_hud = piece_detector.draw_pieces(warped, stabilized)
             h, w = vis.shape[:2]
             thumb = cv2.resize(warped_hud, (200, 200))
             vis[h - 200 : h, w - 200 : w] = thumb
 
         # Mode label + piece count
-        _draw_hud_text(vis, current_mode, len(pieces), board_state)
+        _draw_hud_text(vis, current_mode, len(stabilized), board_state)
 
         # JPEG encode
         _, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), _JPEG_QUALITY])
@@ -162,8 +205,8 @@ def _draw_hud_text(
         "none":  (0, 0, 220),
     }.get(mode, (200, 200, 200))
 
-    white_n = sum(1 for v in board_state.values() if v == "white")
-    black_n = sum(1 for v in board_state.values() if v == "black")
+    white_n = sum(1 for v in board_state.values() if v.isupper())
+    black_n = sum(1 for v in board_state.values() if v.islower())
 
     lines = [
         f"Mode: {mode.upper()}",
@@ -234,7 +277,6 @@ def board_svg():
     with _lock:
         svg = _current_svg
     if not svg:
-        # Return empty board SVG when no board detected
         svg = chess.svg.board(chess.Board(None), size=400)
     return Response(svg, mimetype="image/svg+xml")
 
@@ -396,10 +438,31 @@ _HTML_PAGE = """<!DOCTYPE html>
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def start(camera_index: int = 0, port: int = 5050, debug: bool = False,
-          host: str = "127.0.0.1") -> None:
-    """Start capture thread then Flask (blocking)."""
-    t = threading.Thread(target=_capture_loop, args=(camera_index,), daemon=True)
+def start(
+    camera_index: int = 0,
+    port: int = 5050,
+    debug: bool = False,
+    host: str = "127.0.0.1",
+    video_path: Optional[str] = None,
+) -> None:
+    """Start capture thread then Flask (blocking).
+
+    Parameters
+    ----------
+    camera_index:
+        Camera device index (ignored when video_path is set).
+    video_path:
+        Path to a video file to stream instead of a live camera.
+        Video loops automatically when EOF is reached.
+    """
+    _tracker.reset()  # clear any stale state on restart
+
+    cam_arg = None if video_path else camera_index
+    t = threading.Thread(
+        target=_capture_loop,
+        args=(cam_arg, video_path),
+        daemon=True,
+    )
     t.start()
 
     # Wait for first frame
@@ -416,5 +479,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="UR Chess live camera stream")
     parser.add_argument("--camera", type=int, default=0, help="Camera device index")
     parser.add_argument("--port",   type=int, default=5050, help="Flask port")
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Path to a video file to use instead of a live camera (loops on EOF)",
+    )
     args = parser.parse_args()
-    start(camera_index=args.camera, port=args.port)
+    start(camera_index=args.camera, port=args.port, video_path=args.video)

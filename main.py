@@ -5,6 +5,7 @@ Usage (non-interactive):
   python3 main.py --mode sim       [--port 5070] [--model ag/claude-sonnet-4-6]
   python3 main.py --mode live      [--port 5050] [--camera 0]
   python3 main.py --mode benchmark
+  python3 main.py --mode benchmark --video path/to/Test_video.mp4
   python3 main.py --mode cli       [--model ag/claude-sonnet-4-6]
   python3 main.py --mode arena     [--robot-mode sim|real] [--model ag/claude-sonnet-4-6]
   python3 main.py --mode test
@@ -60,19 +61,27 @@ def run_sim(port: int, model: str) -> None:
     app.run(host="127.0.0.1", port=port, debug=False)
 
 
-def run_live(port: int, camera: int) -> None:
+def run_live(port: int, camera: int, video_path: str | None = None) -> None:
     if _port_busy(port):
         sys.exit(f"[ERROR] Port {port} already in use. Choose another with --port.")
     from src.vision.live_stream import start  # type: ignore[import]
-    print(f"[LIVE] Starting camera stream on http://127.0.0.1:{port} (camera {camera})")
-    start(camera_index=camera, port=port)
+    if video_path:
+        print(f"[LIVE] Starting video stream on http://127.0.0.1:{port} (file: {video_path})")
+    else:
+        print(f"[LIVE] Starting camera stream on http://127.0.0.1:{port} (camera {camera})")
+    start(camera_index=camera, port=port, video_path=video_path)
 
 
-def run_benchmark() -> None:
-    print("[BENCHMARK] Running OpenCV detection on test board photo...")
+def run_benchmark(video_path: str | None = None) -> None:
+    if video_path:
+        print(f"[BENCHMARK] Running video benchmark on: {video_path}")
+        cmd = [sys.executable, "scripts/benchmark_board.py", "--video", video_path]
+    else:
+        print("[BENCHMARK] Running OpenCV detection on test board photo...")
+        cmd = [sys.executable, "scripts/benchmark_board.py"]
     env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.abspath(__file__))}
     result = subprocess.run(
-        [sys.executable, "scripts/benchmark_board.py"],
+        cmd,
         cwd=os.path.dirname(os.path.abspath(__file__)),
         env=env,
     )
@@ -179,9 +188,41 @@ def interactive_menu() -> None:
     elif choice == "1":
         run_sim(_DEFAULTS["sim_port"], _DEFAULTS["model"])
     elif choice == "2":
-        run_live(_DEFAULTS["live_port"], _DEFAULTS["camera"])
+        try:
+            src_choice = input("Source — 1: Webcam (enter index), 2: Video file (enter path): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            sys.exit(0)
+        if src_choice == "2":
+            try:
+                video_path = input("Video file path: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nBye.")
+                sys.exit(0)
+            run_live(_DEFAULTS["live_port"], _DEFAULTS["camera"], video_path=video_path)
+        else:
+            cam_idx = _DEFAULTS["camera"]
+            if src_choice not in ("1", ""):
+                try:
+                    cam_idx = int(src_choice)
+                except ValueError:
+                    pass
+            run_live(_DEFAULTS["live_port"], cam_idx)
     elif choice == "3":
-        run_benchmark()
+        try:
+            bm_choice = input("Benchmark — 1: Static photo, 2: Video file: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            sys.exit(0)
+        if bm_choice == "2":
+            try:
+                bm_video = input("Video file path: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nBye.")
+                sys.exit(0)
+            run_benchmark(video_path=bm_video)
+        else:
+            run_benchmark()
     elif choice == "4":
         run_cli(_DEFAULTS["model"])
     elif choice == "5":
@@ -225,6 +266,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=None, help="Override default port")
     p.add_argument("--camera", type=int, default=0, help="Camera index (live mode, default 0)")
     p.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Video file path for live or benchmark mode (live: loops on EOF; benchmark: per-frame analysis)",
+    )
+    p.add_argument(
         "--model",
         default="ag/claude-sonnet-4-6",
         help="LLM model name via 9Router (default ag/claude-sonnet-4-6)",
@@ -242,9 +289,9 @@ def main(argv: list[str] | None = None) -> None:
         elif args.mode == "sim":
             run_sim(args.port or _DEFAULTS["sim_port"], args.model)
         elif args.mode == "live":
-            run_live(args.port or _DEFAULTS["live_port"], args.camera)
+            run_live(args.port or _DEFAULTS["live_port"], args.camera, video_path=args.video)
         elif args.mode == "benchmark":
-            run_benchmark()
+            run_benchmark(video_path=args.video)
         elif args.mode == "cli":
             run_cli(args.model)
         elif args.mode == "test":

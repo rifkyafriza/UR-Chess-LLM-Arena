@@ -1,12 +1,15 @@
-"""Benchmark real board photo: both localization modes, piece detection, FEN validation.
+"""Benchmark real board photo or video: localization, piece detection, FEN validation.
 
 Usage:
     python scripts/benchmark_board.py
+    python scripts/benchmark_board.py --video path/to/Test_video.mp4
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
+import time
 from pathlib import Path
 
 # Ensure repo root is on sys.path so 'from src...' imports resolve
@@ -161,10 +164,8 @@ def draw_benchmark_vis(
     return result
 
 
-def main() -> int:
-    img_path = str(_REPO_ROOT / "assets" / "test_board_with_pieces.jpg")
-    out_path = str(_REPO_ROOT / "assets" / "benchmark_result.jpg")
-
+def run_photo_benchmark(img_path: str, out_path: str) -> int:
+    """Run static photo benchmark. Returns exit code (0=pass, 1=error, 2=fen mismatch)."""
     frame = cv2.imread(img_path)
     if frame is None:
         print(f"ERROR: cannot read {img_path}")
@@ -238,6 +239,100 @@ def main() -> int:
     print(f"[Output] Saved benchmark visualization: {out_path}")
 
     return 0 if fen_ok else 2
+
+
+def run_video_benchmark(video_path: str) -> int:
+    """Process every frame sequentially; print summary report. Returns 0 on success."""
+    from src.vision.fen_serializer import serialize_fen
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"ERROR: cannot open video {video_path}")
+        return 1
+
+    total_fps = cap.get(cv2.CAP_PROP_FPS) or 0
+    total_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print(f"[Video Benchmark] {video_path}")
+    print(f"  Source FPS        : {total_fps:.1f}")
+    print(f"  Source frames     : {total_frame_count}")
+    print()
+
+    frames_processed = 0
+    localized_count = 0
+    piece_counts: list[int] = []
+    fen_match_count = 0
+    t_start = time.perf_counter()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frames_processed += 1
+
+        # Try contour localization (primary)
+        m2 = run_mode2(frame)
+        localized = m2["success"]
+
+        if localized:
+            localized_count += 1
+            matrix = np.array(m2["matrix"], dtype=np.float64)
+            pieces, board_state = run_piece_detection(frame, matrix)
+            piece_counts.append(len(pieces))
+            fen = serialize_fen(board_state, castling="KQkq")
+            if fen == EXPECTED_FEN:
+                fen_match_count += 1
+        else:
+            piece_counts.append(0)
+
+    cap.release()
+    elapsed = time.perf_counter() - t_start
+
+    if frames_processed == 0:
+        print("ERROR: no frames read from video")
+        return 1
+
+    localization_rate = localized_count / frames_processed * 100
+    avg_pieces = sum(piece_counts) / len(piece_counts) if piece_counts else 0
+    # FEN match rate over localized frames only (avoids penalizing failed detections)
+    fen_match_rate = (fen_match_count / localized_count * 100) if localized_count else 0
+    processing_fps = frames_processed / elapsed if elapsed > 0 else 0
+
+    print("=" * 56)
+    print("  VIDEO BENCHMARK SUMMARY")
+    print("=" * 56)
+    print(f"  Total frames processed : {frames_processed}")
+    print(f"  Board localization rate : {localization_rate:.1f}%  ({localized_count}/{frames_processed})")
+    print(f"  Avg piece count/frame  : {avg_pieces:.1f}")
+    print(f"  FEN match rate         : {fen_match_rate:.1f}%  ({fen_match_count}/{localized_count} localized frames)")
+    print(f"  Processing FPS         : {processing_fps:.2f}")
+    print(f"  Wall-clock time        : {elapsed:.2f} s")
+    print("=" * 56)
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Vision benchmark for board/piece detection")
+    parser.add_argument(
+        "--video",
+        type=str,
+        default=None,
+        help="Path to video file for video benchmark (omit for static photo benchmark)",
+    )
+    parser.add_argument(
+        "--image",
+        type=str,
+        default=None,
+        help="Override default test image path (photo benchmark only)",
+    )
+    args = parser.parse_args()
+
+    if args.video:
+        return run_video_benchmark(args.video)
+
+    img_path = args.image or str(_REPO_ROOT / "assets" / "test_board_with_pieces.jpg")
+    out_path = str(_REPO_ROOT / "assets" / "benchmark_result.jpg")
+    return run_photo_benchmark(img_path, out_path)
 
 
 if __name__ == "__main__":

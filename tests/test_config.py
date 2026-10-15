@@ -70,7 +70,7 @@ class TestDefaults:
     def test_vision_defaults(self):
         v = VisionConfig()
         assert v.camera_index == 0
-        assert v.locator_mode == "aruco"
+        assert v.locator_mode == "contour"
         assert v.aruco_dict == "DICT_4X4_50"
         assert v.resolution == (1280, 720)
         assert v.stream_port == 5050

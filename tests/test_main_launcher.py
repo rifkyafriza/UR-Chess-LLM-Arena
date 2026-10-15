@@ -94,12 +94,12 @@ class TestDispatch:
     def test_mode_live_dispatches_run_live(self):
         with patch.object(main, "run_live") as mock_live:
             main.main(["--mode", "live"])
-            mock_live.assert_called_once_with(5050, 0)
+            mock_live.assert_called_once_with(5050, 0, video_path=None)
 
     def test_mode_live_camera_override(self):
         with patch.object(main, "run_live") as mock_live:
             main.main(["--mode", "live", "--camera", "1"])
-            mock_live.assert_called_once_with(5050, 1)
+            mock_live.assert_called_once_with(5050, 1, video_path=None)
 
     def test_mode_benchmark_dispatches_run_benchmark(self):
         with patch.object(main, "run_benchmark") as mock_bench:

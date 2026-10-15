@@ -122,7 +122,29 @@ python3 main.py --mode arena --robot-mode sim --model ag/claude-opus-4-6-thinkin
 **Vision Benchmark** — run OpenCV ArUco detection on a test board photo:
 
 ```bash
+# Static photo benchmark (default)
 python3 main.py --mode benchmark
+
+# Video benchmark — process every frame, print summary report
+python3 main.py --mode benchmark --video path/to/Test_video.mp4
+
+# Direct script invocation
+python scripts/benchmark_board.py
+python scripts/benchmark_board.py --video path/to/Test_video.mp4
+```
+
+Video benchmark output:
+```
+========================================================
+  VIDEO BENCHMARK SUMMARY
+========================================================
+  Total frames processed : 300
+  Board localization rate : 94.3%  (283/300)
+  Avg piece count/frame  : 29.1
+  FEN match rate         : 78.4%  (222/283 localized frames)
+  Processing FPS         : 12.45
+  Wall-clock time        : 24.10 s
+========================================================
 ```
 
 **CLI Chess** — terminal chess game vs LLM:
