@@ -2,7 +2,9 @@
 
 Left pane:  draggable ArUco canvas (IDs 1-32, white=1-16, black=17-32).
 Right pane: live SVG chessboard + FEN + move history + LLM reasoning.
-API /api/move: receive piece positions -> validate move -> LLM counter-move.
+API /api/move: receive piece positions -> validate move -> LLM counter-move (AI mode)
+               or human move (PvP mode, no LLM).
+API /api/mode: switch game mode {'mode': 'ai' | 'pvp'}.
 """
 
 from __future__ import annotations
@@ -47,7 +49,15 @@ _BLACK_START: dict[int, tuple[str, str]] = {
     29: ("p", "e7"), 30: ("p", "f7"), 31: ("p", "g7"), 32: ("p", "h7"),
 }
 
-# square name -> ArUco ID (at start, updated as pieces move)
+# Castling rook square remapping: UCI move -> (rook_from, rook_to)
+_CASTLING_ROOK: dict[str, tuple[str, str]] = {
+    "e1g1": ("h1", "f1"),  # White kingside
+    "e1c1": ("a1", "d1"),  # White queenside
+    "e8g8": ("h8", "f8"),  # Black kingside
+    "e8c8": ("a8", "d8"),  # Black queenside
+}
+
+
 def _build_initial_positions() -> dict[int, str]:
     """Return {marker_id: square} for all 32 pieces at start."""
     pos: dict[int, str] = {}
@@ -62,6 +72,8 @@ def _positions_to_board_state(positions: dict[int, str]) -> dict[str, str]:
     """Map marker positions to {square: piece_char} for FEN serialization."""
     state: dict[str, str] = {}
     for mid, sq in positions.items():
+        if sq == "__captured__":
+            continue  # skip off-board markers
         if 1 <= mid <= 16:
             piece_char = _WHITE_START[mid][0]
         elif 17 <= mid <= 32:
@@ -73,9 +85,57 @@ def _positions_to_board_state(positions: dict[int, str]) -> dict[str, str]:
 
 
 def _board_state_to_fen(board_state: dict[str, str], active: str = "w") -> str:
-    """Minimal FEN from square→piece_char. Castling/ep cleared for sim."""
+    """Minimal FEN from square->piece_char. Castling/ep cleared for sim."""
     from src.vision.fen_serializer import serialize_fen
     return serialize_fen(board_state, active_color=active, castling="-", en_passant="-")
+
+
+def _sync_positions_after_move(positions: dict[int, str], move: chess.Move, board_before: chess.Board) -> None:
+    """Synchronize positions dict after a move is applied to board_before (pre-push state).
+
+    Handles:
+    - Normal moves: piece from -> to
+    - Captures: victim marker -> '__captured__'
+    - Castling: rook remapped in addition to king
+    - En passant: captured pawn square resolved from board_before ep square
+    """
+    from_sq = chess.square_name(move.from_square)
+    to_sq = chess.square_name(move.to_square)
+    uci = move.uci()[:4]  # strip promotion suffix for castling check
+
+    is_white_mover = board_before.turn == chess.WHITE
+    mover_range = range(1, 17) if is_white_mover else range(17, 33)
+    victim_range = range(17, 33) if is_white_mover else range(1, 17)
+
+    # Move the mover marker from_sq -> to_sq
+    for mid in mover_range:
+        if positions.get(mid) == from_sq:
+            positions[mid] = to_sq
+            break
+
+    # Mark any victim at to_sq as captured (normal captures)
+    for mid in victim_range:
+        if positions.get(mid) == to_sq:
+            positions[mid] = "__captured__"
+            break
+
+    # En passant: captured pawn is NOT on to_sq
+    if board_before.is_en_passant(move):
+        # The captured pawn sits on the same file as to_sq but rank of from_sq
+        ep_rank = from_sq[1]  # rank stays the same as the capturing pawn's start rank
+        ep_sq = to_sq[0] + ep_rank
+        for mid in victim_range:
+            if positions.get(mid) == ep_sq:
+                positions[mid] = "__captured__"
+                break
+
+    # Castling: also move the rook
+    if uci in _CASTLING_ROOK:
+        rook_from, rook_to = _CASTLING_ROOK[uci]
+        for mid in mover_range:
+            if positions.get(mid) == rook_from:
+                positions[mid] = rook_to
+                break
 
 
 # ── Application state (single-game, in-memory) ────────────────────────────────
@@ -92,6 +152,7 @@ class GameState:
         self.move_history: list[str] = []
         self.last_reasoning: str = ""
         self.last_llm_move: str = ""
+        self.game_mode: str = "ai"  # 'ai' | 'pvp'
 
     def svg(self) -> str:
         return chess.svg.board(self.board, size=400)
@@ -110,6 +171,7 @@ class GameState:
             "is_game_over": self.board.is_game_over(),
             "outcome": str(self.board.outcome()) if self.board.is_game_over() else None,
             "positions": {str(k): v for k, v in self.positions.items()},
+            "game_mode": self.game_mode,
         }
 
 
@@ -135,9 +197,10 @@ _HTML = r"""<!DOCTYPE html>
   #left { flex: 0 0 540px; display: flex; flex-direction: column; border-right: 2px solid #0f3460; background: #16213e; }
   #canvas-wrap { position: relative; width: 512px; height: 512px; margin: 16px auto 0; }
   #chess-canvas { border: 3px solid #0f3460; cursor: default; }
-  #left-controls { padding: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  #left-controls { padding: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button { background: #0f3460; color: #e0e0e0; border: 1px solid #e94560; padding: 6px 14px; cursor: pointer; border-radius: 4px; font-family: monospace; }
   button:hover { background: #e94560; color: #fff; }
+  button.active-mode { background: #e94560; color: #fff; font-weight: bold; }
   #status-bar { padding: 8px 12px; font-size: 0.8em; color: #aaa; border-top: 1px solid #0f3460; }
   /* ── Right pane ── */
   #right { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; overflow-y: auto; }
@@ -154,6 +217,8 @@ _HTML = r"""<!DOCTYPE html>
   #overlay { display:none; position:fixed; top:0;left:0;right:0;bottom:0; background:rgba(0,0,0,0.65); z-index:100; align-items:center; justify-content:center; }
   #overlay.show { display:flex; }
   #overlay-msg { background:#16213e; border:2px solid #e94560; padding:30px 40px; border-radius:10px; font-size:1.3em; color:#eee; text-align:center; }
+  /* ── Captured pieces tray ── */
+  #captured-tray { padding: 6px 12px; font-size: 0.85em; color: #aaa; min-height: 28px; border-top: 1px solid #0f3460; }
 </style>
 </head>
 <body>
@@ -168,8 +233,12 @@ _HTML = r"""<!DOCTYPE html>
       <button onclick="resetGame()">&#8635; New Game</button>
       <button onclick="undoMove()">&#8592; Undo</button>
       <span id="turn-badge" class="white-turn">White to move</span>
+      <span style="margin-left:auto;font-size:0.8em;color:#aaa;">Mode:</span>
+      <button id="btn-mode-ai" class="active-mode" onclick="setMode('ai')">vs AI</button>
+      <button id="btn-mode-pvp" onclick="setMode('pvp')">PvP</button>
     </div>
-    <div id="status-bar" id="status-bar">Drag white pieces to make a move.</div>
+    <div id="captured-tray">Captured: —</div>
+    <div id="status-bar">Drag white pieces to make a move.</div>
   </div>
   <!-- Right: live SVG + telemetry -->
   <div id="right">
@@ -223,10 +292,10 @@ const ID_TO_PIECE = {};  // id -> {piece, color, startSq}
 });
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let positions = {};   // markerId -> square string e.g. 'e4'
+let positions = {};   // markerId -> square string e.g. 'e4' | '__captured__'
 let serverTurn = 'white';
+let gameMode = 'ai';  // 'ai' | 'pvp'
 let dragging = null;  // {id, offsetX, offsetY, pixelX, pixelY}
-let pieceImages = {}; // sq -> image element (Unicode rendering onto canvas)
 let gameOver = false;
 
 function sqToPixel(sq) {
@@ -287,6 +356,7 @@ function drawPieces() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (const [idStr, sq] of Object.entries(positions)) {
+    if (sq === '__captured__') continue;  // skip captured markers
     const id = parseInt(idStr);
     if (dragging && dragging.id === id) continue;  // drawn separately
     const {x, y} = sqToPixel(sq);
@@ -310,13 +380,28 @@ function drawPieces() {
   }
 }
 
+function updateCapturedTray() {
+  const whites = [], blacks = [];
+  for (const [idStr, sq] of Object.entries(positions)) {
+    if (sq !== '__captured__') continue;
+    const id = parseInt(idStr);
+    if (id <= 16) whites.push(glyph(id));
+    else blacks.push(glyph(id));
+  }
+  const text = (whites.length || blacks.length)
+    ? 'Captured: ' + (blacks.join('') || '') + ' | ' + (whites.join('') || '')
+    : 'Captured: —';
+  document.getElementById('captured-tray').textContent = text;
+}
+
 function render() {
   ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
   drawBoard();
   drawPieces();
+  updateCapturedTray();
 }
 
-// ── Drag & drop (white only when white's turn) ────────────────────────────────
+// ── Drag & drop ───────────────────────────────────────────────────────────────
 function getCanvasPos(e) {
   const rect = canvas.getBoundingClientRect();
   const touch = e.touches ? e.touches[0] : e;
@@ -332,13 +417,21 @@ function findMarkerAt(px, py) {
   return null;
 }
 
+function canDrag(id) {
+  // AI mode: only white pieces on white's turn
+  // PvP mode: white pieces on white's turn OR black pieces (17-32) on black's turn
+  if (gameOver) return false;
+  if (id >= 1 && id <= 16) return serverTurn === 'white';
+  if (id >= 17 && id <= 32) return gameMode === 'pvp' && serverTurn === 'black';
+  return false;
+}
+
 canvas.addEventListener('mousedown', e => startDrag(getCanvasPos(e)));
 canvas.addEventListener('touchstart', e => { e.preventDefault(); startDrag(getCanvasPos(e)); }, {passive:false});
 
 function startDrag(pos) {
-  if (gameOver || serverTurn !== 'white') return;
   const id = findMarkerAt(pos.x, pos.y);
-  if (!id || id > 16) return;  // only white pieces
+  if (!id || !canDrag(id)) return;
   dragging = {id, pixelX: pos.x, pixelY: pos.y, fromSq: positions[id]};
 }
 
@@ -403,7 +496,12 @@ function applyServerState(data) {
     for (const [k,v] of Object.entries(data.positions)) positions[parseInt(k)] = v;
   }
   serverTurn = data.turn;
+  gameMode = data.game_mode || 'ai';
   gameOver = data.is_game_over;
+
+  // Sync mode buttons
+  document.getElementById('btn-mode-ai').className = (gameMode === 'ai') ? 'active-mode' : '';
+  document.getElementById('btn-mode-pvp').className = (gameMode === 'pvp') ? 'active-mode' : '';
 
   // Right pane
   document.getElementById('svg-wrap').innerHTML = data.svg || '';
@@ -415,7 +513,10 @@ function applyServerState(data) {
     li.textContent = (i%2===0 ? Math.floor(i/2+1)+'. ' : '') + m;
     ml.appendChild(li);
   });
-  document.getElementById('reasoning-text').textContent = data.reasoning || '';
+
+  const reasoningLabel = gameMode === 'pvp' ? 'PvP mode — no LLM' : (data.reasoning || '');
+  document.getElementById('reasoning-text').textContent = reasoningLabel;
+
   const badge = document.getElementById('turn-badge');
   badge.textContent = data.is_game_over ? 'Game over' : (data.turn==='white' ? 'White to move' : 'Black to move');
   badge.className = data.turn==='white' ? 'white-turn' : 'black-turn';
@@ -424,8 +525,28 @@ function applyServerState(data) {
     document.getElementById('overlay-msg').textContent = 'Game Over: ' + (data.outcome||'');
     document.getElementById('overlay').classList.add('show');
   }
-  setStatus(data.llm_move ? `LLM played: ${data.llm_move}` : 'Your turn (drag white piece)');
+
+  const modeHint = gameMode === 'pvp' ? ' (Pass & Play)' : '';
+  if (data.is_game_over) {
+    setStatus('Game over.');
+  } else if (data.llm_move) {
+    setStatus(`LLM played: ${data.llm_move}`);
+  } else {
+    setStatus(`Your turn${modeHint}: drag ${data.turn} piece.`);
+  }
   render();
+}
+
+async function setMode(mode) {
+  const resp = await fetch('/api/mode', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mode}),
+  });
+  const data = await resp.json();
+  if (!resp.ok) { setStatus('Mode error: ' + (data.error || '')); return; }
+  applyServerState(data);
+  setStatus(`Mode set: ${mode === 'pvp' ? 'Player vs Player (Pass & Play)' : 'Player vs AI'}`);
 }
 
 async function resetGame() {
@@ -433,7 +554,6 @@ async function resetGame() {
   document.getElementById('overlay').classList.remove('show');
   const resp = await fetch('/api/reset', {method:'POST'});
   const data = await resp.json();
-  // Re-init positions from server
   if (data.positions) {
     positions = {};
     for (const [k,v] of Object.entries(data.positions)) positions[parseInt(k)] = v;
@@ -491,14 +611,28 @@ def api_reset():
     return jsonify(_game.to_dict())
 
 
-# Undo stack: list of (board_fen, positions_snapshot, history_length)
-_undo_stack: list[tuple[str, dict[int, str], int]] = []
+@app.route("/api/mode", methods=["POST"])
+def api_mode():
+    """Switch game mode: {'mode': 'ai' | 'pvp'}."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object body required"}), 400
+    mode = data.get("mode", "")
+    if mode not in ("ai", "pvp"):
+        return jsonify({"error": "mode must be 'ai' or 'pvp'"}), 400
+    _game.game_mode = mode
+    return jsonify(_game.to_dict())
+
+
+# Undo stack: list of (board_fen, positions_snapshot, history_length, game_mode)
+_undo_stack: list[tuple[str, dict[int, str], int, str]] = []
 _SQUARE_RE = re.compile(r"^[a-h][1-8]$")
 
 
 @app.route("/api/move", methods=["POST"])
 def api_move():
-    """Process human white move, run LLM for black counter-move."""
+    """Process a human move. In AI mode: white moves, LLM plays black.
+    In PvP mode: current player moves, no LLM invoked."""
     global _undo_stack
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -528,14 +662,29 @@ def api_move():
     if not _SQUARE_RE.match(from_sq) or not _SQUARE_RE.match(to_sq):
         return jsonify({"error": "from_sq/to_sq must be squares a1-h8"}), 400
 
-    # Validate the move against python-chess authoritative board
-    if _game.board.turn != chess.WHITE:
-        return jsonify({"error": "not white's turn"}), 400
+    # Validate it is the right player's turn
+    expected_side = chess.WHITE if _game.board.turn == chess.WHITE else chess.BLACK
+    mover_is_white = 1 <= moved_id <= 16
+    mover_is_black = 17 <= moved_id <= 32
 
+    if _game.game_mode == "ai":
+        # AI mode: only white human moves; LLM handles black
+        if _game.board.turn != chess.WHITE:
+            return jsonify({"error": "not white's turn"}), 400
+        if not mover_is_white:
+            return jsonify({"error": "only white pieces allowed in AI mode"}), 400
+    else:
+        # PvP mode: current turn determines which side may move
+        if _game.board.turn == chess.WHITE and not mover_is_white:
+            return jsonify({"error": "it is White's turn"}), 400
+        if _game.board.turn == chess.BLACK and not mover_is_black:
+            return jsonify({"error": "it is Black's turn"}), 400
+
+    # Build UCI string; handle pawn promotion
     uci_str = from_sq + to_sq
-    # Check for pawn promotion (to 8th rank)
-    if (moved_id in _WHITE_START and _WHITE_START[moved_id][0] == "P"
-            and to_sq[1] == "8"):
+    if mover_is_white and _WHITE_START.get(moved_id, ("",))[0] == "P" and to_sq[1] == "8":
+        uci_str += "q"  # auto-promote to queen
+    if mover_is_black and _BLACK_START.get(moved_id, ("",))[0] == "p" and to_sq[1] == "1":
         uci_str += "q"  # auto-promote to queen
 
     try:
@@ -547,20 +696,24 @@ def api_move():
         return jsonify({"error": f"illegal move: {uci_str}"}), 400
 
     # Save undo snapshot BEFORE applying
-    _undo_stack.append((_game.board.fen(), dict(_game.positions), len(_game.move_history)))
+    _undo_stack.append((_game.board.fen(), dict(_game.positions), len(_game.move_history), _game.game_mode))
 
-    # Apply white move to board
+    # Apply human move — sync positions dict (handles castling, en passant, captures)
+    _sync_positions_after_move(_game.positions, move, _game.board)
     _game.board.push(move)
-    _game.positions.update(client_positions)
     _game.move_history.append(move.uci())
     _game.last_reasoning = ""
     _game.last_llm_move = ""
 
-    # Check game over after white move
+    # Check game over after human move
     if _game.board.is_game_over():
         return jsonify(_game.to_dict())
 
-    # ── LLM counter-move for black ────────────────────────────────────────────
+    # PvP: return immediately; other player moves next
+    if _game.game_mode == "pvp":
+        return jsonify(_game.to_dict())
+
+    # ── AI mode: LLM counter-move for black ───────────────────────────────────
     try:
         llm_move = get_best_move(_game.board, **_MODEL_KW)
         _game.last_reasoning = (
@@ -569,28 +722,13 @@ def api_move():
             f"Chosen: {llm_move.uci()}"
         )
         _game.last_llm_move = llm_move.uci()
-        # Apply black move
+        # Sync positions dict for black's move (captures, castling, en passant)
+        _sync_positions_after_move(_game.positions, llm_move, _game.board)
         _game.board.push(llm_move)
         _game.move_history.append(llm_move.uci())
-        # Update black marker position
-        black_from = llm_move.from_square
-        black_to = llm_move.to_square
-        from_alg = chess.square_name(black_from)
-        to_alg = chess.square_name(black_to)
-        # Find marker at from_alg and move it
-        for mid, sq in list(_game.positions.items()):
-            if sq == from_alg and 17 <= mid <= 32:
-                _game.positions[mid] = to_alg
-                break
-        # Remove any captured white marker at to_alg
-        for mid, sq in list(_game.positions.items()):
-            if sq == to_alg and 1 <= mid <= 16:
-                # Mark captured by moving off-board
-                _game.positions[mid] = "__captured__"
-                break
     except Exception as exc:
         logger.warning("LLM move failed: %s", exc)
-        _game.last_reasoning = "LLM error: move unavailable (see server log)"
+        _game.last_reasoning = f"LLM unavailable: {exc}. Board not locked — white to retry or undo."
 
     return jsonify(_game.to_dict())
 
@@ -600,10 +738,11 @@ def api_undo():
     global _undo_stack
     if not _undo_stack:
         return jsonify({"error": "nothing to undo"}), 400
-    fen, pos, hist_len = _undo_stack.pop()
+    fen, pos, hist_len, mode = _undo_stack.pop()
     _game.board = chess.Board(fen)
     _game.positions = pos
     del _game.move_history[hist_len:]
+    _game.game_mode = mode
     _game.last_reasoning = ""
     _game.last_llm_move = ""
     return jsonify(_game.to_dict())
@@ -612,7 +751,7 @@ def api_undo():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run(host: str = "127.0.0.1", port: int = 5060, debug: bool = False) -> None:
-    """Start the simulation web server."""
+    """Start the simulation web server. Zero robot/UR hardware dependencies."""
     app.run(host=host, port=port, debug=debug)
 
 

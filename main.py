@@ -64,7 +64,7 @@ def run_live(port: int, camera: int) -> None:
         sys.exit(f"[ERROR] Port {port} already in use. Choose another with --port.")
     from src.vision.live_stream import start  # type: ignore[import]
     print(f"[LIVE] Starting camera stream on http://127.0.0.1:{port} (camera {camera})")
-    vision_app.run(host="127.0.0.1", port=port, debug=False)
+    start(camera_index=camera, port=port)
 
 
 def run_benchmark() -> None:
