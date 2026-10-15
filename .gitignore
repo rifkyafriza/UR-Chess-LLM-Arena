@@ -4,4 +4,10 @@ __pycache__/
 venv/
 .env
 *.log
-.DS_Store
+*.DS_Store
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+assets/*.mp4

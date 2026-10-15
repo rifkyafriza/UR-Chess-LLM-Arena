@@ -364,4 +364,88 @@
   3. Verify file permissions and safe atomic writing of `arena_config.yaml`.
   4. Verify complete test suite passing status.
   5. Produce audit report `docs/AUDIT_CONFIG_EDITOR.md` and provide CERTIFIED/APPROVED verdict.
-- **Acceptance Criteria**: Reviewer certifies config editor safety and publishes audit report.
+- **Acceptance Criteria**: Reviewer certifies config editor safety and publishes audit report. Status: **APPROVED** (`t_6c7233ea`).
+
+---
+
+## Phase 7: Vision Video Benchmark, Tracking Optimization & Dual-Pane Display Fixes
+
+### Task 11A: Optimize ArUco Detection, Piece Mapping, and Temporal Tracking (`src/vision/piece_detector.py`)
+- **Assignee**: `vision-dev`
+- **Parent**: Task 10C (`t_6c7233ea`)
+- **Scope**:
+  1. Define standard starting position piece mapping `ID_TO_PIECE_CHAR`:
+     - IDs 1-8: R, N, B, Q, K, B, N, R
+     - IDs 9-16: P
+     - IDs 17-24: r, n, b, q, k, b, n, r
+     - IDs 25-32: p
+  2. Implement `build_piece_type_board_state(pieces: list[dict]) -> dict[str, str]` mapping square to exact piece char (not just color).
+  3. Optimize ArUco detector parameters in `piece_detector.py`:
+     - Tune adaptive thresholding parameters, subpixel corner refinement, and contrast enhancement (CLAHE / multi-pass) to maximize marker detection on raw frames.
+  4. Implement `TemporalPieceTracker`:
+     - Maintain piece positions across frames with configurable TTL / persistence (e.g. 5-10 frames) to eliminate transient 1-2 frame dropouts caused by motion or lighting flutter.
+     - Emit stabilized list of pieces for downstream consumers.
+- **Acceptance Criteria**: Detection on full resolution frames achieves 32/32 markers with stability, correctly identifying non-pawn pieces.
+
+### Task 11B: Set Default Contour Locator, Digital SVG Board Piece Types, and Mock Video Live Stream (`src/vision/live_stream.py`, `src/config.py`, `config/arena_config.yaml`)
+- **Assignee**: `vision-dev`
+- **Parent**: Task 11A
+- **Scope**:
+  1. Update default locator mode to `"contour"` in:
+     - `config/arena_config.yaml`
+     - `src/config.py` (`VisionConfig.locator_mode = "contour"`)
+  2. In `src/vision/live_stream.py`:
+     - Prioritize contour grid detection (`board_locator_grid.localize_board`) as primary locator when locator_mode is contour or on boards without corner markers.
+     - Call `detect_pieces_from_frame(frame, matrix)` on full-resolution frame instead of downsampled warped image.
+     - Use `build_piece_type_board_state()` and `serialize_fen()` with real piece types so SVG displays Knights, Rooks, Bishops, Kings, Queens, and Pawns accurately.
+     - Use `TemporalPieceTracker` to prevent flickering and maintain steady 32/32 count.
+     - Add `--video` support to accept video file path (loops playback when EOF reached).
+  3. In `main.py`:
+     - Support `--mode live --video <path>` CLI option.
+     - In interactive menu `[2] Live Camera Stream`, allow user to choose between physical camera index or mock video file.
+     - Note: ensure test video files are strictly ignored by `.gitignore` and never committed to git.
+- **Acceptance Criteria**: Live stream web interface displays stable 32/32 pieces, real piece icons on SVG board, and loops mock video cleanly.
+
+### Task 11C: Video Tracking Benchmark CLI (`scripts/benchmark_board.py` & `main.py`)
+- **Assignee**: `backend-dev`
+- **Parent**: Task 11B
+- **Scope**:
+  1. Extend `scripts/benchmark_board.py`:
+     - Add `--video <path>` CLI argument.
+     - Process video frame by frame, measuring:
+       - Total frames processed
+       - Board localization success rate (%)
+       - Average detected piece count (target 32/32)
+       - FEN stability and initial position match rate (%)
+       - Processing FPS (throughput)
+     - Output clean formatted benchmark summary report to stdout.
+  2. Wire into `main.py`:
+     - Support `python3 main.py --mode benchmark --video <path>`.
+     - In interactive menu `[3] Vision Benchmark`, offer choice: Static Image Benchmark vs Video Benchmark.
+- **Acceptance Criteria**: Running benchmark on video outputs comprehensive statistics with high accuracy.
+
+### Task 11D: Comprehensive Test Suite for Phase 7 (`tests/test_vision_video_refinements.py`)
+- **Assignee**: `qa-dev`
+- **Parent**: Task 11C
+- **Scope**:
+  1. Test `src/vision/piece_detector.py`:
+     - Test `ID_TO_PIECE_CHAR` and `build_piece_type_board_state` maps IDs 1-32 to expected squares and symbols.
+     - Test `TemporalPieceTracker` preserves piece states across momentary dropouts and expires after TTL.
+  2. Test `src/config.py` default locator is `"contour"`.
+  3. Test `src/vision/live_stream.py`:
+     - Test piece type SVG generation contains 'knight', 'rook', 'bishop', 'queen', 'king'.
+     - Test video file source loop handling.
+  4. Test `scripts/benchmark_board.py` video benchmark function with a synthetic or short clip.
+  5. Run full test suite to guarantee 100% green pass.
+- **Acceptance Criteria**: All new tests pass, zero regressions across the 918 existing tests.
+
+### Task 11E: Reviewer Security, Performance & Gitignore Audit (`docs/AUDIT_VISION_VIDEO_REFINEMENTS.md`)
+- **Assignee**: `reviewer`
+- **Parent**: Task 11D
+- **Scope**:
+  1. Audit `.gitignore` and repository working tree to verify NO `*.mp4` or video files are staged or committed.
+  2. Audit `TemporalPieceTracker` for memory leaks, bounded state size, and concurrency safety with Flask lock.
+  3. Audit FEN generation and board SVG rendering for accuracy.
+  4. Verify full test suite passes.
+  5. Produce audit report `docs/AUDIT_VISION_VIDEO_REFINEMENTS.md` with CERTIFIED/APPROVED verdict.
+- **Acceptance Criteria**: Reviewer certifies Phase 7 deliverables and publishes audit report.
