@@ -2,10 +2,11 @@
 
 Usage (interactive):  python3 main.py
 Usage (non-interactive):
-  python3 main.py --mode sim       [--port 5060] [--model ag/claude-sonnet-4-6]
+  python3 main.py --mode sim       [--port 5070] [--model ag/claude-sonnet-4-6]
   python3 main.py --mode live      [--port 5050] [--camera 0]
   python3 main.py --mode benchmark
   python3 main.py --mode cli       [--model ag/claude-sonnet-4-6]
+  python3 main.py --mode arena     [--robot-mode sim|real] [--model ag/claude-sonnet-4-6]
   python3 main.py --mode test
 """
 
@@ -69,9 +70,11 @@ def run_live(port: int, camera: int) -> None:
 
 def run_benchmark() -> None:
     print("[BENCHMARK] Running OpenCV detection on test board photo...")
+    env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.abspath(__file__))}
     result = subprocess.run(
         [sys.executable, "scripts/benchmark_board.py"],
         cwd=os.path.dirname(os.path.abspath(__file__)),
+        env=env,
     )
     sys.exit(result.returncode)
 
@@ -80,9 +83,11 @@ def run_cli(model: str) -> None:
     _check_9router(model)
     # chess_game.py reads MODEL from argv or uses a default; inject via env
     os.environ.setdefault("CHESS_MODEL", model)
+    env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.abspath(__file__))}
     result = subprocess.run(
         [sys.executable, "chess_game.py", "--model", model],
         cwd=os.path.dirname(os.path.abspath(__file__)),
+        env=env,
     )
     sys.exit(result.returncode)
 
@@ -124,9 +129,11 @@ def run_arena(robot_mode: str, model: str) -> None:
 
 def run_tests() -> None:
     print("[TEST] Running full automated test suite...")
+    env = {**os.environ, "PYTHONPATH": os.path.dirname(os.path.abspath(__file__))}
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-v"],
         cwd=os.path.dirname(os.path.abspath(__file__)),
+        env=env,
     )
     sys.exit(result.returncode)
 
@@ -144,12 +151,13 @@ _MENU = """
 ║  [3] Vision Benchmark      (OpenCV on test photo)     ║
 ║  [4] Terminal Chess (CLI)  (vs 9Router LLM)           ║
 ║  [5] Run Full Test Suite   (pytest)                   ║
+║  [6] Arena Mode            (Full FSM: human vs LLM + robot) ║
 ║  [0] Exit                                             ║
 ╚══════════════════════════════════════════════════════╝
 """
 
 _DEFAULTS = {
-    "sim_port": 5060,
+    "sim_port": 5070,
     "live_port": 5050,
     "camera": 0,
     "model": "ag/claude-sonnet-4-6",
@@ -177,8 +185,16 @@ def interactive_menu() -> None:
         run_cli(_DEFAULTS["model"])
     elif choice == "5":
         run_tests()
+    elif choice == "6":
+        try:
+            robot_choice = input("Robot mode — 1: Sim (Mock UR), 2: Real UR robot: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye.")
+            sys.exit(0)
+        robot_mode = "real" if robot_choice == "2" else "sim"
+        run_arena(robot_mode, _DEFAULTS["model"])
     else:
-        print(f"[ERROR] Unknown choice '{choice}'. Valid: 0-5.")
+        print(f"[ERROR] Unknown choice '{choice}'. Valid: 0-6.")
         sys.exit(1)
 
 

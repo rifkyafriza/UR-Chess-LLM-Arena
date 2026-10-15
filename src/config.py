@@ -96,7 +96,7 @@ class StrategyConfig:
 @dataclass
 class SimulationConfig:
     host: str = "127.0.0.1"
-    port: int = 5060
+    port: int = 5070
 
 
 @dataclass
@@ -193,7 +193,7 @@ def _build_strategy(d: dict) -> StrategyConfig:
 def _build_simulation(d: dict) -> SimulationConfig:
     return SimulationConfig(
         host=str(d.get("host", "127.0.0.1")),
-        port=int(d.get("port", 5060)),
+        port=int(d.get("port", 5070)),
     )
 
 

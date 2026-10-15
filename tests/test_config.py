@@ -84,7 +84,7 @@ class TestDefaults:
     def test_simulation_defaults(self):
         s = SimulationConfig()
         assert s.host == "127.0.0.1"
-        assert s.port == 5060
+        assert s.port == 5070
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ class TestExport:
         d = cfg.to_dict()
         assert d["robot"]["mode"] == "sim"
         assert d["vision"]["stream_port"] == 5050
-        assert d["simulation"]["port"] == 5060
+        assert d["simulation"]["port"] == 5070
 
     def test_to_yaml_roundtrip(self, tmp_path):
         cfg = ArenaConfig()
@@ -274,7 +274,7 @@ class TestPartialYaml:
         assert cfg.robot.mode == "real"
         # Other sections get defaults
         assert cfg.vision.stream_port == 5050
-        assert cfg.simulation.port == 5060
+        assert cfg.simulation.port == 5070  # default when section absent
 
     def test_only_vision_section(self, tmp_path):
         p = _write_yaml(tmp_path, "vision:\n  camera_index: 2\n")
@@ -301,7 +301,7 @@ class TestShippedConfig:
         assert isinstance(cfg, ArenaConfig)
         assert cfg.robot.mode in ("sim", "real")
         assert cfg.vision.stream_port == 5050
-        assert cfg.simulation.port == 5060
+        assert cfg.simulation.port == 5070  # default when section absent
 
 
 def test_unsafe_values_rejected(tmp_path):

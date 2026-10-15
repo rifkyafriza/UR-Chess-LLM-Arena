@@ -1,16 +1,18 @@
-"""Live camera web stream with ArUco HUD overlay.
+"""Live camera web stream with ArUco HUD overlay and dual-pane SVG board.
 
 Flask MJPEG server:
-    GET /         — HTML viewer page
-    GET /video    — MJPEG stream
-    GET /state    — JSON board state snapshot
+    GET /          — HTML dual-pane viewer (camera + SVG board)
+    GET /video     — MJPEG stream
+    GET /state     — JSON board state: mode, fen, svg, piece_count
+    GET /board_svg — Raw SVG of current recognized position
 
 Detection pipeline per frame:
     1. Try ArUco corner markers (IDs 40-43) → board_locator_aruco.locate_board
     2. Fallback: contour grid detection  → board_locator_grid.localize_board
     3. Detect piece markers (IDs 1-32)   → piece_detector.detect_pieces
-    4. Render HUD overlay on raw frame
-    5. JPEG-encode and push to MJPEG boundary
+    4. Generate FEN + SVG from board state
+    5. Render HUD overlay on raw frame
+    6. JPEG-encode and push to MJPEG boundary
 
 Run:
     python -m src.vision.live_stream [--camera 0] [--port 5050]
@@ -24,11 +26,17 @@ import threading
 import time
 from typing import Optional
 
+import chess
+import chess.svg
 import cv2
 import numpy as np
 from flask import Flask, Response, jsonify
 
 from src.vision import board_locator_aruco, board_locator_grid, piece_detector
+from src.vision.fen_serializer import serialize_fen
+
+# Map detector color labels to FEN piece chars (pawn placeholder; no type info)
+_COLOR_TO_FEN: dict[str, str] = {"white": "P", "black": "p"}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -39,9 +47,11 @@ _FRAME_DELAY  = 1.0 / _TARGET_FPS
 # ── Shared state (capture thread → Flask threads) ─────────────────────────────
 
 _lock        = threading.Lock()
-_jpeg_bytes: bytes          = b""
+_jpeg_bytes: bytes           = b""
 _board_state: dict[str, str] = {}
-_mode: str                  = "none"   # "aruco" | "grid" | "none"
+_mode: str                   = "none"   # "aruco" | "grid" | "none"
+_current_fen: str            = ""
+_current_svg: str            = ""
 
 # ── Capture thread ────────────────────────────────────────────────────────────
 
@@ -62,7 +72,7 @@ def _capture_loop(camera_index: int) -> None:
 
 
 def _capture_frames(cap, t_next: float) -> None:
-    global _jpeg_bytes, _board_state, _mode
+    global _jpeg_bytes, _board_state, _mode, _current_fen, _current_svg
     while True:
         ok, frame = cap.read()
         if not ok or frame is None:
@@ -93,6 +103,15 @@ def _capture_frames(cap, t_next: float) -> None:
 
         board_state = piece_detector.build_board_state(pieces)
 
+        # --- Generate FEN + SVG from detected board state ---
+        fen_board_state = {sq: _COLOR_TO_FEN[color] for sq, color in board_state.items()}
+        fen = serialize_fen(fen_board_state) if fen_board_state else ""
+        try:
+            chess_board = chess.Board(fen) if fen else chess.Board(None)
+            svg = chess.svg.board(chess_board, size=400)
+        except Exception:
+            svg = ""
+
         # --- HUD overlay on raw frame ---
         vis = frame.copy()
 
@@ -119,6 +138,8 @@ def _capture_frames(cap, t_next: float) -> None:
             _jpeg_bytes  = jpeg
             _board_state = board_state
             _mode        = current_mode
+            _current_fen = fen
+            _current_svg = svg
 
         # FPS cap
         now    = time.monotonic()
@@ -202,8 +223,20 @@ def state():
             "mode":        _mode,
             "board_state": _board_state,
             "piece_count": len(_board_state),
+            "fen":         _current_fen,
+            "svg":         _current_svg,
         }
     return jsonify(payload)
+
+
+@app.route("/board_svg")
+def board_svg():
+    with _lock:
+        svg = _current_svg
+    if not svg:
+        # Return empty board SVG when no board detected
+        svg = chess.svg.board(chess.Board(None), size=400)
+    return Response(svg, mimetype="image/svg+xml")
 
 
 # ── HTML viewer ───────────────────────────────────────────────────────────────
@@ -214,24 +247,143 @@ _HTML_PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>UR Chess — Live Vision</title>
 <style>
-  body { margin:0; background:#1a1a1a; color:#eee; font-family:monospace; }
-  h1   { text-align:center; padding:8px 0; font-size:1.1rem; }
-  #stream { display:block; margin:0 auto; max-width:100%; border:2px solid #444; }
-  #state  { white-space:pre; padding:8px 16px; font-size:0.85rem; color:#aef; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #111;
+    color: #eee;
+    font-family: monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    text-align: center;
+    padding: 10px;
+    font-size: 1.1rem;
+    letter-spacing: 2px;
+    border-bottom: 1px solid #333;
+    background: #1a1a1a;
+  }
+  #panes {
+    display: flex;
+    flex: 1;
+    gap: 12px;
+    padding: 12px;
+    justify-content: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .pane {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .pane-title {
+    font-size: 0.75rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  #stream {
+    display: block;
+    max-width: 480px;
+    width: 100%;
+    border: 2px solid #444;
+    border-radius: 4px;
+  }
+  #board-wrap {
+    width: 400px;
+    height: 400px;
+    border: 2px solid #444;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #222;
+    overflow: hidden;
+  }
+  #board-wrap svg {
+    width: 100%;
+    height: 100%;
+  }
+  #statusbar {
+    width: 100%;
+    background: #1a1a1a;
+    border-top: 1px solid #333;
+    padding: 8px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 0.8rem;
+    color: #aaa;
+    align-items: center;
+  }
+  #statusbar .badge {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-weight: bold;
+    font-size: 0.75rem;
+    color: #111;
+  }
+  .badge-aruco { background: #00dc00; }
+  .badge-grid  { background: #00b4ff; }
+  .badge-none  { background: #dc0000; }
+  #fen-str {
+    font-size: 0.7rem;
+    color: #6af;
+    word-break: break-all;
+    max-width: 600px;
+  }
 </style>
 </head>
 <body>
-<h1>UR Chess — Live Camera Stream</h1>
-<img id="stream" src="/video" alt="camera stream">
-<pre id="state">Loading...</pre>
+<header>UR Chess &mdash; Live Vision</header>
+<div id="panes">
+  <div class="pane">
+    <div class="pane-title">Live Camera</div>
+    <img id="stream" src="/video" alt="camera stream">
+  </div>
+  <div class="pane">
+    <div class="pane-title">Digital Board</div>
+    <div id="board-wrap"><span style="color:#555">Waiting...</span></div>
+  </div>
+</div>
+<div id="statusbar">
+  <span id="mode-badge" class="badge badge-none">NONE</span>
+  <span id="piece-count">Pieces: 0</span>
+  <span id="fen-str">FEN: —</span>
+  <span id="last-updated"></span>
+</div>
 <script>
   async function poll() {
     try {
       const r = await fetch('/state');
       const d = await r.json();
-      document.getElementById('state').textContent =
-        'Mode: ' + d.mode + '\\nPieces: ' + d.piece_count +
-        '\\nBoard state: ' + JSON.stringify(d.board_state, null, 2);
+
+      // Mode badge
+      const badge = document.getElementById('mode-badge');
+      badge.textContent = d.mode ? d.mode.toUpperCase() : 'NONE';
+      badge.className = 'badge badge-' + (d.mode || 'none');
+
+      // Piece count
+      document.getElementById('piece-count').textContent = 'Pieces: ' + (d.piece_count || 0);
+
+      // FEN
+      document.getElementById('fen-str').textContent = d.fen ? 'FEN: ' + d.fen : 'FEN: —';
+
+      // SVG board
+      if (d.svg) {
+        document.getElementById('board-wrap').innerHTML = d.svg;
+      }
+
+      // Timestamp
+      document.getElementById('last-updated').textContent =
+        'Updated: ' + new Date().toLocaleTimeString();
     } catch(e) {}
     setTimeout(poll, 500);
   }

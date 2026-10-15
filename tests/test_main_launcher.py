@@ -84,7 +84,7 @@ class TestDispatch:
     def test_mode_sim_dispatches_run_sim(self):
         with patch.object(main, "run_sim") as mock_sim:
             main.main(["--mode", "sim"])
-            mock_sim.assert_called_once_with(5060, "ag/claude-sonnet-4-6")
+            mock_sim.assert_called_once_with(5070, "ag/claude-sonnet-4-6")
 
     def test_mode_sim_port_override(self):
         with patch.object(main, "run_sim") as mock_sim:

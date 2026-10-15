@@ -7,6 +7,12 @@ Usage:
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# Ensure repo root is on sys.path so 'from src...' imports resolve
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+
 import cv2
 import numpy as np
 
@@ -156,8 +162,8 @@ def draw_benchmark_vis(
 
 
 def main() -> int:
-    img_path = "assets/test_board_with_pieces.jpg"
-    out_path = "assets/benchmark_result.jpg"
+    img_path = str(_REPO_ROOT / "assets" / "test_board_with_pieces.jpg")
+    out_path = str(_REPO_ROOT / "assets" / "benchmark_result.jpg")
 
     frame = cv2.imread(img_path)
     if frame is None:

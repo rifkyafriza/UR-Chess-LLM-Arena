@@ -1,4 +1,4 @@
-"""Interactive browser chess simulation — Flask app on port 5060.
+"""Interactive browser chess simulation — Flask app on port 5070.
 
 Left pane:  draggable ArUco canvas (IDs 1-32, white=1-16, black=17-32).
 Right pane: live SVG chessboard + FEN + move history + LLM reasoning.
@@ -750,8 +750,8 @@ def api_undo():
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def run(host: str = "127.0.0.1", port: int = 5060, debug: bool = False) -> None:
-    """Start the simulation web server. Zero robot/UR hardware dependencies."""
+def run(host: str = "127.0.0.1", port: int = 5070, debug: bool = False) -> None:
+    """Start the simulation web server on port 5070 (default). Zero robot/UR hardware dependencies."""
     app.run(host=host, port=port, debug=debug)
 
 
